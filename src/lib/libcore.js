@@ -21,6 +21,31 @@
 // new function with an '_', it will not be found.
 
 addToLibrary({
+  // HEAP definitions are here to help with TypeScript type generation.
+  $HEAP8__docs: '/** @type {!Int8Array} */',
+  $HEAP8: undefined,
+  $HEAPU8__docs: '/** @type {!Uint8Array} */',
+  $HEAPU8: undefined,
+  $HEAP16__docs: '/** @type {!Int16Array} */',
+  $HEAP16: undefined,
+  $HEAPU16__docs: '/** @type {!Uint16Array} */',
+  $HEAPU16: undefined,
+  $HEAP32__docs: '/** @type {!Int32Array} */',
+  $HEAP32: undefined,
+  $HEAPU32__docs: '/** @type {!Uint32Array} */',
+  $HEAPU32: undefined,
+  $HEAPF32__docs: '/** @type {!Float32Array} */',
+  $HEAPF32: undefined,
+  $HEAPF64__docs: '/** @type {!Float64Array} */',
+  $HEAPF64: undefined,
+#if WASM_BIGINT
+  // BigInt64Array type is not correctly defined in closure
+  $HEAP64__docs: '/** not-@type {!BigInt64Array} */',
+  $HEAP64: undefined,
+  $HEAPU64__docs: '/** not-@type {!BigUint64Array} */',
+  $HEAPU64: undefined,
+#endif
+
   // JS aliases for native stack manipulation functions and tempret handling
   $stackSave__deps: ['emscripten_stack_get_current'],
   $stackSave: () => _emscripten_stack_get_current(),
@@ -37,19 +62,32 @@ addToLibrary({
   // functions to continue to work in `__deps` entries.
   stackAlloc: '$stackAlloc',
   stackSave: '$stackSave',
-  stackRestore: '$stackSave',
+  stackRestore: '$stackRestore',
   setTempRet0: '$setTempRet0',
   getTempRet0: '$getTempRet0',
 
-  $ptrToString: (ptr) => {
+
+  // Assign a name to a given function. This is mostly useful for debugging
+  // purposes in cases where new functions are created at runtime.
+  $createNamedFunction: (name, func) => Object.defineProperty(func, 'name', { value: name }),
+
+  // This function is referenced *very* early on in some configurations
+  // (e.g WASM_WORKERS + RUNTIME_DEBUG) so we explictly use a function here
+  // rather than an arrow function so that it gets hoisted to the top of the
+  // scope.
+  $ptrToString: function(ptr) {
 #if ASSERTIONS
-    assert(typeof ptr === 'number');
+    assert(typeof ptr === 'number', `ptrToString expects a number, got ${typeof ptr}`);
 #endif
-#if !CAN_ADDRESS_2GB && !MEMORY64
-    // With CAN_ADDRESS_2GB or MEMORY64, pointers are already unsigned.
+#if MEMORY64
+    // Convert to 64-bit unsigned value.  We need to use BigInt here since
+    // Number cannot represent the full 64-bit range.
+    if (ptr < 0) ptr = 2n**64n + BigInt(ptr);
+#else
+    // Convert to 32-bit unsigned value
     ptr >>>= 0;
 #endif
-    return '0x' + ptr.toString(16).padStart(8, '0');
+    return '0x' + ptr.toString(16).padStart({{{ POINTER_SIZE * 2 }}}, '0');
   },
 
   $zeroMemory: (ptr, size) => HEAPU8.fill(0, ptr, ptr + size),
@@ -117,9 +155,6 @@ addToLibrary({
     // if exit() was called explicitly, warn the user if the runtime isn't actually being shut down
     if (keepRuntimeAlive() && !implicit) {
       var msg = `program exited (with status: ${status}), but keepRuntimeAlive() is set (counter=${runtimeKeepaliveCounter}) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)`;
-#if MODULARIZE
-      readyPromiseReject?.(msg);
-#endif // MODULARIZE
       err(msg);
     }
 #endif // ASSERTIONS
@@ -182,9 +217,11 @@ addToLibrary({
     try {
       // round size grow request up to wasm page size (fixed 64KB per spec)
       wasmMemory.grow({{{ toIndexType('pages') }}}); // .grow() takes a delta compared to the previous size
+#if GROWABLE_ARRAYBUFFERS != 2
       updateMemoryViews();
+#endif
 #if MEMORYPROFILER
-      if (typeof emscriptenMemoryProfiler != 'undefined') {
+      if (typeof emscriptenMemoryProfiler !== 'undefined') {
         emscriptenMemoryProfiler.onMemoryResize(oldHeapSize, wasmMemory.buffer.byteLength);
       }
 #endif
@@ -194,7 +231,7 @@ addToLibrary({
       err(`growMemory: Attempted to grow heap from ${oldHeapSize} bytes to ${size} bytes, but got error: ${e}`);
 #endif
     }
-    // implicit 0 return to save code size (caller will cast "undefined" into 0
+    // implicit 0 return to save code size (caller will cast 'undefined' into 0
     // anyhow)
   },
 
@@ -302,7 +339,7 @@ addToLibrary({
 #endif
 
 #if EMSCRIPTEN_TRACING
-        traceLogMessage("Emscripten", `Enlarging memory arrays from ${oldSize} to ${newSize}`);
+        traceLogMessage('Emscripten', `Enlarging memory arrays from ${oldSize} to ${newSize}`);
         // And now report the new layout
         _emscripten_trace_report_memory_layout();
 #endif
@@ -320,6 +357,7 @@ addToLibrary({
 #endif // ALLOW_MEMORY_GROWTH
   },
 
+#if GROWABLE_ARRAYBUFFERS != 2
   // Called after wasm grows memory. At that time we need to update the views.
   // Without this notification, we'd need to check the buffer in JS every time
   // we return from any wasm, which adds overhead. See
@@ -330,6 +368,7 @@ addToLibrary({
 #endif
     updateMemoryViews();
   },
+#endif
 
   _emscripten_system: (command) => {
 #if ENVIRONMENT_MAY_BE_NODE
@@ -339,7 +378,7 @@ addToLibrary({
       var cmdstr = UTF8ToString(command);
       if (!cmdstr.length) return 0; // this is what glibc seems to do (shell works test?)
 
-      var cp = require('child_process');
+      var cp = require('node:child_process');
       var ret = cp.spawnSync(cmdstr, [], {shell:true, stdio:'inherit'});
 
       var _W_EXITCODE = (ret, sig) => ((ret) << 8 | (sig));
@@ -443,15 +482,11 @@ addToLibrary({
   // a proxy and declare the dependency here.
   _emscripten_throw_longjmp__deps: ['setThrew'],
   _emscripten_throw_longjmp: () => {
-#if EXCEPTION_STACK_TRACES
     throw new EmscriptenSjLj;
-#else
-    throw Infinity;
-#endif
   },
 #elif !SUPPORT_LONGJMP
 #if !INCLUDE_FULL_LIBRARY
-  // These are in order to print helpful error messages when either longjmp of
+  // These are in order to print helpful error messages when either longjmp or
   // setjmp is used.
   longjmp__deps: [() => {
     error('longjmp support was disabled (SUPPORT_LONGJMP=0), but it is required by the code (either set SUPPORT_LONGJMP=1, or remove uses of it in the project)');
@@ -643,30 +678,30 @@ addToLibrary({
     if (!valid6regx.test(str)) {
       return null;
     }
-    if (str === "::") {
+    if (str === '::') {
       return [0, 0, 0, 0, 0, 0, 0, 0];
     }
-    // Z placeholder to keep track of zeros when splitting the string on ":"
-    if (str.startsWith("::")) {
-      str = str.replace("::", "Z:"); // leading zeros case
+    // Z placeholder to keep track of zeros when splitting the string on ':'
+    if (str.startsWith('::')) {
+      str = str.replace('::', 'Z:'); // leading zeros case
     } else {
-      str = str.replace("::", ":Z:");
+      str = str.replace('::', ':Z:');
     }
 
-    if (str.indexOf(".") > 0) {
-      // parse IPv4 embedded stress
-      str = str.replace(new RegExp('[.]', 'g'), ":");
-      words = str.split(":");
+    if (str.indexOf('.') > 0) {
+      // parse IPv4 embedded address
+      str = str.replace(new RegExp('[.]', 'g'), ':');
+      words = str.split(':');
       words[words.length-4] = Number(words[words.length-4]) + Number(words[words.length-3])*256;
       words[words.length-3] = Number(words[words.length-2]) + Number(words[words.length-1])*256;
       words = words.slice(0, words.length-2);
     } else {
-      words = str.split(":");
+      words = str.split(':');
     }
 
     offset = 0; z = 0;
     for (w=0; w < words.length; w++) {
-      if (typeof words[w] == 'string') {
+      if (typeof words[w] === 'string') {
         if (words[w] === 'Z') {
           // compressed zeros - write appropriate number of zero words
           for (z = 0; z < (8 - words.length+1); z++) {
@@ -674,7 +709,7 @@ addToLibrary({
           }
           offset = z-1;
         } else {
-          // parse hex to field to 16-bit value and write it in network byte-order
+          // parse hex field to 16-bit value and write it in network byte-order
           parts[w+offset] = _htons(parseInt(words[w],16));
         }
       } else {
@@ -705,7 +740,7 @@ addToLibrary({
     //  +--------------------------------------+----+---------------------+
     //  |0000..............................0000|FFFF|    IPv4 ADDRESS     | (mapped)
     //  +--------------------------------------+----+---------------------+
-    var str = "";
+    var str = '';
     var word = 0;
     var longest = 0;
     var lastzero = 0;
@@ -726,10 +761,13 @@ addToLibrary({
     // Handle IPv4-compatible, IPv4-mapped, loopback and any/unspecified addresses
 
     var hasipv4 = true;
-    var v4part = "";
+    var v4part = '';
     // check if the 10 high-order bytes are all zeros (first 5 words)
     for (i = 0; i < 5; i++) {
-      if (parts[i] !== 0) { hasipv4 = false; break; }
+      if (parts[i]) {
+        hasipv4 = false;
+        break;
+      }
     }
 
     if (hasipv4) {
@@ -737,16 +775,16 @@ addToLibrary({
       v4part = inetNtop4(parts[6] | (parts[7] << 16));
       // IPv4-mapped IPv6 address if 16-bit value (bytes 11 and 12) == 0xFFFF (6th word)
       if (parts[5] === -1) {
-        str = "::ffff:";
+        str = '::ffff:';
         str += v4part;
         return str;
       }
       // IPv4-compatible IPv6 address if 16-bit value (bytes 11 and 12) == 0x0000 (6th word)
-      if (parts[5] === 0) {
-        str = "::";
-        //special case IPv6 addresses
-        if (v4part === "0.0.0.0") v4part = ""; // any/unspecified address
-        if (v4part === "0.0.0.1") v4part = "1";// loopback address
+      if (!parts[5]) {
+        str = '::';
+        // special case IPv6 addresses
+        if (v4part === '0.0.0.0') v4part = ''; // any/unspecified address
+        if (v4part === '0.0.0.1') v4part = '1';// loopback address
         str += v4part;
         return str;
       }
@@ -756,7 +794,7 @@ addToLibrary({
 
     // first run to find the longest contiguous zero words
     for (word = 0; word < 8; word++) {
-      if (parts[word] === 0) {
+      if (!parts[word]) {
         if (word - lastzero > 1) {
           len = 0;
         }
@@ -771,23 +809,27 @@ addToLibrary({
 
     for (word = 0; word < 8; word++) {
       if (longest > 1) {
-        // compress contiguous zeros - to produce "::"
-        if (parts[word] === 0 && word >= zstart && word < (zstart + longest) ) {
+        // compress contiguous zeros - to produce '::'
+        if (!parts[word] && word >= zstart && word < (zstart + longest) ) {
           if (word === zstart) {
-            str += ":";
-            if (zstart === 0) str += ":"; //leading zeros case
+            str += ':';
+            if (!zstart) str += ':'; //leading zeros case
           }
           continue;
         }
       }
       // converts 16-bit words from big-endian to little-endian before converting to hex string
       str += Number(_ntohs(parts[word] & 0xffff)).toString(16);
-      str += word < 7 ? ":" : "";
+      str += word < 7 ? ':' : '';
     }
     return str;
   },
 
-  $readSockaddr__deps: ['$inetNtop4', '$inetNtop6', 'ntohs'],
+  $readSockaddr__deps: ['$inetNtop4', '$inetNtop6', 'ntohs'
+#if NODERAWSOCKETS
+    , '$UTF8ToString'
+#endif
+  ],
   $readSockaddr: (sa, salen) => {
     // family / port offsets are common to both sockaddr_in and sockaddr_in6
     var family = {{{ makeGetValue('sa', C_STRUCTS.sockaddr_in.sin_family, 'i16') }}};
@@ -795,6 +837,26 @@ addToLibrary({
     var addr;
 
     switch (family) {
+#if NODERAWSOCKETS
+      case {{{ cDefs.AF_UNIX }}}: {
+        // sun_path runs from offsetof(sun_path) to salen. An address of only the
+        // family (salen <= offset) is the unnamed/autobind case -> empty path. A
+        // leading NUL marks the Linux abstract namespace; keep the NUL so the
+        // path round-trips and never collides with a filesystem path.
+        var pathStart = sa + {{{ C_STRUCTS.sockaddr_un.sun_path }}};
+        var pathLen = salen - {{{ C_STRUCTS.sockaddr_un.sun_path }}};
+        var path = '';
+        if (pathLen > 0) {
+          if (!HEAPU8[pathStart]) {
+            path = '\0' + UTF8ToString(pathStart + 1, pathLen - 1, /*ignoreNul=*/true);
+          } else {
+            // A pathname address is NUL-terminated; stop at the first NUL.
+            path = UTF8ToString(pathStart, pathLen);
+          }
+        }
+        return { family, addr: path, port: 0 };
+      }
+#endif
       case {{{ cDefs.AF_INET }}}:
         if (salen !== {{{ C_STRUCTS.sockaddr_in.__size__ }}}) {
           return { errno: {{{ cDefs.EINVAL }}} };
@@ -821,11 +883,44 @@ addToLibrary({
     return { family: family, addr: addr, port: port };
   },
   $writeSockaddr__docs: '/** @param {number=} addrlen */',
-  $writeSockaddr__deps: ['$inetPton4', '$inetPton6', '$zeroMemory', 'htons'],
+  $writeSockaddr__deps: ['$inetPton4', '$inetPton6', '$zeroMemory', '$DNS', 'htons'
+#if NODERAWSOCKETS
+    , '$lengthBytesUTF8', '$stringToUTF8'
+#endif
+  ],
   $writeSockaddr: (sa, family, addr, port, addrlen) => {
     switch (family) {
+#if NODERAWSOCKETS
+      case {{{ cDefs.AF_UNIX }}}: {
+        // addr is the JS path string produced by readSockaddr: a leading '\0'
+        // marks the abstract namespace (its bytes are written verbatim, no NUL
+        // terminator), any other path is written NUL-terminated. An empty path
+        // is the unnamed address (family only).
+        addr ||= '';
+        var abstract = !addr.charCodeAt(0);
+        // Pathname addresses include the trailing NUL in the reported length;
+        // abstract addresses do not; an empty address is family-only (unnamed).
+        var bytes = addr ? lengthBytesUTF8(addr) + (abstract ? 0 : 1) : 0;
+        var total = {{{ C_STRUCTS.sockaddr_un.sun_path }}} + bytes;
+        zeroMemory(sa, total);
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_un.sun_family, 'family', 'i16') }}};
+        if (addr) {
+          // stringToUTF8 NUL-terminates and needs room for it, so hand it a
+          // budget one past the path bytes; the terminating NUL lands on the
+          // zeroed byte just past the reported length and is harmless.
+          stringToUTF8(addr, sa + {{{ C_STRUCTS.sockaddr_un.sun_path }}}, bytes + 1);
+        }
+        if (addrlen) {
+          {{{ makeSetValue('addrlen', 0, 'total', 'i32') }}};
+        }
+        break;
+      }
+#endif
       case {{{ cDefs.AF_INET }}}:
-        addr = inetPton4(addr);
+        // The address may still be an unresolved hostname (e.g. a peer name
+        // recorded at connect time); map it to its (possibly fake) IP here so
+        // callers can pass names and IPs alike.
+        addr = inetPton4(DNS.lookup_name(addr));
         zeroMemory(sa, {{{ C_STRUCTS.sockaddr_in.__size__ }}});
         if (addrlen) {
           {{{ makeSetValue('addrlen', 0, C_STRUCTS.sockaddr_in.__size__, 'i32') }}};
@@ -835,7 +930,7 @@ addToLibrary({
         {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in.sin_port, '_htons(port)', 'i16') }}};
         break;
       case {{{ cDefs.AF_INET6 }}}:
-        addr = inetPton6(addr);
+        addr = inetPton6(DNS.lookup_name(addr));
         zeroMemory(sa, {{{ C_STRUCTS.sockaddr_in6.__size__ }}});
         if (addrlen) {
           {{{ makeSetValue('addrlen', 0, C_STRUCTS.sockaddr_in6.__size__, 'i32') }}};
@@ -883,7 +978,9 @@ addToLibrary({
         addr = DNS.address_map.addrs[name];
       } else {
         var id = DNS.address_map.id++;
+#if ASSERTIONS
         assert(id < 65535, 'exceeded max address mappings of 65535');
+#endif
 
         addr = '172.29.' + (id & 0xff) + '.' + (id & 0xff00);
 
@@ -904,14 +1001,30 @@ addToLibrary({
   },
 
   _emscripten_lookup_name__deps: ['$UTF8ToString', '$DNS', '$inetPton4'],
+  // Proxied so that there is a single DNS table, on the main thread, shared
+  // with getaddrinfo, getnameinfo and the socket syscalls.
+  _emscripten_lookup_name__proxy: 'sync',
   _emscripten_lookup_name: (name) => {
     // uint32_t _emscripten_lookup_name(const char *name);
     var nameString = UTF8ToString(name);
     return inetPton4(DNS.lookup_name(nameString));
   },
 
-  getaddrinfo__deps: ['$DNS', '$inetPton4', '$inetNtop4', '$inetPton6', '$inetNtop6', '$writeSockaddr', 'malloc', 'htonl'],
+  getaddrinfo__deps: ['$DNS', '$inetPton4', '$inetNtop4', '$inetPton6', '$inetNtop6', '$writeSockaddr', 'malloc', 'htonl',
+#if NODERAWSOCKETS
+    '$nodeSockHelpers',
+#endif
+#if NODERAWSOCKETS && ASYNCIFY
+    '$Asyncify',
+#endif
+  ],
   getaddrinfo__proxy: 'sync',
+#if NODERAWSOCKETS && (PTHREADS || ASYNCIFY)
+  // Returns an EAI_* code synchronously, or - for a hostname needing a real
+  // DNS lookup - a Promise of one, which a sync-proxied pthread awaits and
+  // ASYNCIFY/JSPI suspend on.
+  getaddrinfo__async: true,
+#endif
   getaddrinfo: (node, service, hint, out) => {
     // Note getaddrinfo currently only returns a single addrinfo with ai_next defaulting to NULL. When NULL
     // hints are specified or ai_family set to AF_UNSPEC or ai_socktype or ai_protocol set to 0 then we
@@ -938,7 +1051,9 @@ addToLibrary({
         inetNtop4(addr);
       sa = _malloc(salen);
       errno = writeSockaddr(sa, family, addr, port);
+#if ASSERTIONS
       assert(!errno);
+#endif
 
       ai = _malloc({{{ C_STRUCTS.addrinfo.__size__ }}});
       {{{ makeSetValue('ai', C_STRUCTS.addrinfo.ai_family, 'family', 'i32') }}};
@@ -956,6 +1071,27 @@ addToLibrary({
       return ai;
     }
 
+#if NODERAWSOCKETS
+    // Resolve via node:dns (which honors the host's /etc/hosts), chaining one
+    // addrinfo per {family, addr} result into *out.
+    async function lookupHostname() {
+      var entries = await nodeSockHelpers.lookupHost(node, family);
+      if (typeof entries === 'number') return entries;
+      var head = 0, prev = 0;
+      for (var entry of entries) {
+        var ai = allocaddrinfo(entry.family, type, proto, null, entry.addr, port);
+        if (prev) {
+          {{{ makeSetValue('prev', C_STRUCTS.addrinfo.ai_next, 'ai', '*') }}};
+        } else {
+          head = ai;
+        }
+        prev = ai;
+      }
+      {{{ makeSetValue('out', '0', 'head', '*') }}};
+      return 0;
+    }
+#endif
+
     if (hint) {
       flags = {{{ makeGetValue('hint', C_STRUCTS.addrinfo.ai_flags, 'i32') }}};
       family = {{{ makeGetValue('hint', C_STRUCTS.addrinfo.ai_family, 'i32') }}};
@@ -971,10 +1107,10 @@ addToLibrary({
 
     // If type or proto are set to zero in hints we should really be returning multiple addrinfo values, but for
     // now default to a TCP STREAM socket so we can at least return a sensible addrinfo given NULL hints.
-    if (proto === 0) {
+    if (!proto) {
       proto = {{{ cDefs.IPPROTO_TCP }}};
     }
-    if (type === 0) {
+    if (!type) {
       type = {{{ cDefs.SOCK_STREAM }}};
     }
 
@@ -985,14 +1121,14 @@ addToLibrary({
         {{{ cDefs.AI_NUMERICSERV }}}|{{{ cDefs.AI_V4MAPPED }}}|{{{ cDefs.AI_ALL }}}|{{{ cDefs.AI_ADDRCONFIG }}})) {
       return {{{ cDefs.EAI_BADFLAGS }}};
     }
-    if (hint !== 0 && ({{{ makeGetValue('hint', C_STRUCTS.addrinfo.ai_flags, 'i32') }}} & {{{ cDefs.AI_CANONNAME }}}) && !node) {
+    if (hint && ({{{ makeGetValue('hint', C_STRUCTS.addrinfo.ai_flags, 'i32') }}} & {{{ cDefs.AI_CANONNAME }}}) && !node) {
       return {{{ cDefs.EAI_BADFLAGS }}};
     }
     if (flags & {{{ cDefs.AI_ADDRCONFIG }}}) {
       // TODO
       return {{{ cDefs.EAI_NONAME }}};
     }
-    if (type !== 0 && type !== {{{ cDefs.SOCK_STREAM }}} && type !== {{{ cDefs.SOCK_DGRAM }}}) {
+    if (type && type !== {{{ cDefs.SOCK_STREAM }}} && type !== {{{ cDefs.SOCK_DGRAM }}}) {
       return {{{ cDefs.EAI_SOCKTYPE }}};
     }
     if (family !== {{{ cDefs.AF_UNSPEC }}} && family !== {{{ cDefs.AF_INET }}} && family !== {{{ cDefs.AF_INET6 }}}) {
@@ -1017,7 +1153,7 @@ addToLibrary({
       if (family === {{{ cDefs.AF_UNSPEC }}}) {
         family = {{{ cDefs.AF_INET }}};
       }
-      if ((flags & {{{ cDefs.AI_PASSIVE }}}) === 0) {
+      if (!(flags & {{{ cDefs.AI_PASSIVE }}})) {
         if (family === {{{ cDefs.AF_INET }}}) {
           addr = _htonl({{{ cDefs.INADDR_LOOPBACK }}});
         } else {
@@ -1068,6 +1204,25 @@ addToLibrary({
     //
     // try as a hostname
     //
+#if NODERAWSOCKETS
+    // The lookup is asynchronous, so only start it where the calling stack can
+    // wait on the Promise: a sync-proxied pthread (PROXY_SYNC_ASYNC) awaits it,
+    // ASYNCIFY/JSPI suspend on it. Otherwise (the event-loop thread itself) it
+    // must not start at all, since it would write to *out after we have
+    // returned.
+#if PTHREADS
+    if (PThread.currentProxiedOperationCallerThread) return lookupHostname();
+#endif
+#if ASYNCIFY
+    // handleAsync holds a runtime keepalive across the suspension, so a user
+    // callback completing meanwhile does not exit the runtime under main().
+    // Everything above this point is pure, so the ASYNCIFY rewind re-running
+    // this body reaches handleAsync again and takes the stored result.
+    return Asyncify.handleAsync(lookupHostname);
+#else
+    return {{{ cDefs.EAI_AGAIN }}};
+#endif
+#else
     // resolve the hostname to a temporary fake address
     node = DNS.lookup_name(node);
     addr = inetPton4(node);
@@ -1079,9 +1234,11 @@ addToLibrary({
     ai = allocaddrinfo(family, type, proto, null, addr, port);
     {{{ makeSetValue('out', '0', 'ai', '*') }}};
     return 0;
+#endif
   },
 
   getnameinfo__deps: ['$DNS', '$readSockaddr', '$stringToUTF8'],
+  getnameinfo__proxy: 'sync',
   getnameinfo: (sa, salen, node, nodelen, serv, servlen, flags) => {
     var info = readSockaddr(sa, salen);
     if (info.errno) {
@@ -1167,7 +1324,7 @@ addToLibrary({
     // to add extra entries from /etc/protocols if desired - though not sure if that'd actually be useful.
     var list = Protocols.list;
     var map  = Protocols.map;
-    if (list.length === 0) {
+    if (!list.length) {
         var entry = allocprotoent('tcp', 6, ['TCP']);
         list.push(entry);
         map['tcp'] = map['6'] = entry;
@@ -1212,42 +1369,23 @@ addToLibrary({
     return result;
   },
 
-  // ==========================================================================
-  // sockets. Note that the implementation assumes all sockets are always
-  // nonblocking
-  // ==========================================================================
-#if SOCKET_WEBRTC
-  $Sockets__deps: [
-    () => 'var SocketIO = ' + read('../third_party/socket.io.js') + ';\n',
-    () => 'var Peer = ' + read('../third_party/wrtcp.js') + ';\n'
-  ],
-#endif
-  $Sockets: {
-    BUFFER_SIZE: 10*1024, // initial size
-    MAX_BUFFER_SIZE: 10*1024*1024, // maximum size we will grow the buffer
-
-    nextFd: 1,
-    fds: {},
-    nextport: 1,
-    maxport: 65535,
-    peer: null,
-    connections: {},
-    portmap: {},
-    localAddr: 0xfe00000a, // Local address is always 10.0.0.254
-    addrPool: [            0x0200000a, 0x0300000a, 0x0400000a, 0x0500000a,
-               0x0600000a, 0x0700000a, 0x0800000a, 0x0900000a, 0x0a00000a,
-               0x0b00000a, 0x0c00000a, 0x0d00000a, 0x0e00000a] /* 0x0100000a is reserved */
-  },
-
 #endif // PROXY_POSIX_SOCKETS == 0
 
   $timers: {},
 
+  $clearTimers__internal: true,
+  $clearTimers: () => {
+    for (var t of Object.values(timers)) {
+      clearTimeout(t.id);
+    }
+  },
+
   // Helper function for setitimer that registers timers with the eventloop.
   // Timers always fire on the main thread, either directly from JS (here) or
   // or when the main thread is busy waiting calling _emscripten_yield.
+  _setitimer_js__postset: () => addAtExit('clearTimers();'),
   _setitimer_js__proxy: 'sync',
-  _setitimer_js__deps: ['$timers', '$callUserCallback', '_emscripten_timeout', 'emscripten_get_now'],
+  _setitimer_js__deps: ['$timers', '$clearTimers', '$callUserCallback', '_emscripten_timeout', 'emscripten_get_now'],
   _setitimer_js: (which, timeout_ms) => {
 #if RUNTIME_DEBUG
     dbg(`setitimer_js ${which} timeout=${timeout_ms}`);
@@ -1270,7 +1408,7 @@ addToLibrary({
 #if RUNTIME_DEBUG
       dbg(`itimer fired: ${which}`);
 #endif
-      callUserCallback(() => __emscripten_timeout(which, _emscripten_get_now()));
+      callUserCallback(__emscripten_timeout, which, _emscripten_get_now());
     }, timeout_ms);
     timers[which] = { id, timeout_ms };
     return 0;
@@ -1298,7 +1436,7 @@ addToLibrary({
   emscripten_run_script_string__noleakcheck: true,
   emscripten_run_script_string__deps: ['$lengthBytesUTF8', '$stringToUTF8', 'realloc'],
   emscripten_run_script_string: (ptr) => {
-    {{{ makeEval("var s = eval(UTF8ToString(ptr));") }}}
+    {{{ makeEval('var s = eval(UTF8ToString(ptr));') }}}
     if (s == null) {
       return 0;
     }
@@ -1314,13 +1452,13 @@ addToLibrary({
 
   emscripten_date_now: () => Date.now(),
 
-  emscripten_performance_now: () => {{{ getPerformanceNow() }}}(),
+  emscripten_performance_now: () => performance.now(),
 
 #if PTHREADS && !AUDIO_WORKLET
   // Pthreads need their clocks synchronized to the execution of the main
   // thread, so, when using them, make sure to adjust all timings to the
   // respective time origins.
-  emscripten_get_now: () => performance.timeOrigin + {{{ getPerformanceNow() }}}(),
+  emscripten_get_now: () => performance.timeOrigin + performance.now(),
 #else
 #if AUDIO_WORKLET // https://github.com/WebAudio/web-audio-api/issues/2413
   emscripten_get_now: `;
@@ -1328,11 +1466,11 @@ addToLibrary({
     // (https://github.com/WebAudio/web-audio-api/issues/2527), so if building
     // with
     // Audio Worklets enabled, do a dynamic check for its presence.
-    if (typeof performance != 'undefined' && {{{ getPerformanceNow() }}}) {
+    if (globalThis.performance?.now) {
 #if PTHREADS
-      _emscripten_get_now = () => performance.timeOrigin + {{{ getPerformanceNow() }}}();
+      _emscripten_get_now = () => performance.timeOrigin + performance.now();
 #else
-      _emscripten_get_now = () => {{{ getPerformanceNow() }}}();
+      _emscripten_get_now = () => performance.now();
 #endif
     } else {
       _emscripten_get_now = Date.now;
@@ -1340,9 +1478,9 @@ addToLibrary({
 `,
 #else
   // Modern environment where performance.now() is supported:
-  // N.B. a shorter form "_emscripten_get_now = performance.now;" is
+  // N.B. a shorter form '_emscripten_get_now = performance.now;' is
   // unfortunately not allowed even in current browsers (e.g. FF Nightly 75).
-  emscripten_get_now: () => {{{ getPerformanceNow() }}}(),
+  emscripten_get_now: () => performance.now(),
 #endif
 #endif
 
@@ -1353,10 +1491,10 @@ addToLibrary({
     }
 #endif
 #if AUDIO_WORKLET // https://github.com/WebAudio/web-audio-api/issues/2413
-    if (typeof performance == 'object' && performance && typeof performance['now'] == 'function') {
+    if (globalThis.performance?.now) {
       return 1000; // microseconds (1/1000 of a millisecond)
     }
-    return 1000*1000; // milliseconds
+    return 1_000_000; // milliseconds
 #else
     // Modern environment where performance.now() is supported:
     return 1000; // microseconds (1/1000 of a millisecond)
@@ -1367,7 +1505,7 @@ addToLibrary({
   // implementation is not :(
   $nowIsMonotonic__internal: true,
 #if AUDIO_WORKLET // // https://github.com/WebAudio/web-audio-api/issues/2413
-  $nowIsMonotonic: `((typeof performance == 'object' && performance && typeof performance['now'] == 'function'));`,
+  $nowIsMonotonic: `!!globalThis.performance?.now;`,
 #else
   // Modern environment where performance.now() is supported
   $nowIsMonotonic: 1,
@@ -1418,25 +1556,23 @@ addToLibrary({
 
   // We never free the return values of this function so we need to allocate
   // using builtin_malloc to avoid LSan reporting these as leaks.
+#if RETAIN_COMPILER_SETTINGS
   emscripten_get_compiler_setting__noleakcheck: true,
-#if RETAIN_COMPILER_SETTINGS
   emscripten_get_compiler_setting__deps: ['$stringToNewUTF8'],
-#endif
   emscripten_get_compiler_setting: (name) => {
-#if RETAIN_COMPILER_SETTINGS
     name = UTF8ToString(name);
 
     var ret = getCompilerSetting(name);
-    if (typeof ret == 'number' || typeof ret == 'boolean') return ret;
+    if (typeof ret === 'number' || typeof ret === 'boolean') return ret;
 
     var cache = _emscripten_get_compiler_setting.cache ??= {};
     var fullret = cache[name];
     if (fullret) return fullret;
     return cache[name] = stringToNewUTF8(ret);
-#else
-    throw 'You must build with -sRETAIN_COMPILER_SETTINGS for getCompilerSetting or emscripten_get_compiler_setting to work';
-#endif
   },
+#else
+  emscripten_get_compiler_setting: (name) => abort('You must build with -sRETAIN_COMPILER_SETTINGS for getCompilerSetting or emscripten_get_compiler_setting to work'),
+#endif
 
   emscripten_has_asyncify: () => {{{ ASYNCIFY }}},
 
@@ -1449,36 +1585,22 @@ addToLibrary({
     else return lengthBytesUTF8(str);
   },
 
-#if USE_ASAN || USE_LSAN || UBSAN_RUNTIME
-  // When lsan or asan is enabled withBuiltinMalloc temporarily replaces calls
-  // to malloc, calloc, free, and memalign.
-  $withBuiltinMalloc__deps: [
-    'malloc', 'calloc', 'free', 'memalign', 'realloc',
-    'emscripten_builtin_malloc', 'emscripten_builtin_free', 'emscripten_builtin_memalign', 'emscripten_builtin_calloc', 'emscripten_builtin_realloc'
-  ],
-  $withBuiltinMalloc__docs: '/** @suppress{checkTypes} */',
-  $withBuiltinMalloc: (func) => {
-    var prev_malloc = typeof _malloc != 'undefined' ? _malloc : undefined;
-    var prev_calloc = typeof _calloc != 'undefined' ? _calloc : undefined;
-    var prev_memalign = typeof _memalign != 'undefined' ? _memalign : undefined;
-    var prev_free = typeof _free != 'undefined' ? _free : undefined;
-    var prev_realloc = typeof _realloc != 'undefined' ? _realloc : undefined;
-    _malloc = _emscripten_builtin_malloc;
-    _calloc = _emscripten_builtin_calloc;
-    _memalign = _emscripten_builtin_memalign;
-    _free = _emscripten_builtin_free;
-    _realloc = _emscripten_builtin_realloc;
+#if USE_ASAN || USE_LSAN
+  // When lsan is enabled noLeakCheck will temporarily disable leak checking
+  // for the duration of the function.
+  $noLeakCheck__deps: ['__lsan_enable', '__lsan_disable'],
+  $noLeakCheck__docs: '/** @suppress{checkTypes} */',
+  $noLeakCheck: (func) => {
+    if (runtimeInitialized) ___lsan_disable();
     try {
       return func();
     } finally {
-      _malloc = prev_malloc;
-      _calloc = prev_calloc;
-      _memalign = prev_memalign;
-      _free = prev_free;
-      _realloc = prev_realloc;
+      if (runtimeInitialized) ___lsan_enable();
     }
   },
+#endif
 
+#if USE_ASAN || USE_LSAN || UBSAN_RUNTIME
   _emscripten_sanitizer_use_colors: () => {
     var setting = Module['printWithColors'];
     if (setting !== undefined) {
@@ -1487,11 +1609,9 @@ addToLibrary({
     return ENVIRONMENT_IS_NODE && process.stderr.isTTY;
   },
 
-  _emscripten_sanitizer_get_option__deps: ['$withBuiltinMalloc', '$stringToNewUTF8', '$UTF8ToString'],
+  _emscripten_sanitizer_get_option__deps: ['$stringToNewUTF8', '$UTF8ToString'],
   _emscripten_sanitizer_get_option__sig: 'pp',
-  _emscripten_sanitizer_get_option: (name) => {
-    return withBuiltinMalloc(() => stringToNewUTF8(Module[UTF8ToString(name)] || ""));
-  },
+  _emscripten_sanitizer_get_option: (name) => stringToNewUTF8(Module[UTF8ToString(name)] ?? ''),
 #endif
 
   $readEmAsmArgsArray: [],
@@ -1578,7 +1698,7 @@ addToLibrary({
       // is a stack allocation that LLVM made, which may go away before the main
       // thread gets the message. For that reason we handle proxying *after* the
       // call to readEmAsmArgs, and therefore we do that manually here instead
-      // of using __proxy. (And dor simplicity, do the same in the sync
+      // of using __proxy. (And for simplicity, do the same in the sync
       // case as well, even though it's not strictly necessary, to keep the two
       // code paths as similar as possible on both sides.)
       return proxyToMainThread(0, emAsmAddr, sync, ...args);
@@ -1601,62 +1721,50 @@ addToLibrary({
 #endif
 
 #if !DECLARE_ASM_MODULE_EXPORTS
-  // When DECLARE_ASM_MODULE_EXPORTS is not set we export native symbols
-  // at runtime rather than statically in JS code.
-  $exportWasmSymbols__deps: ['$asmjsMangle'],
-  $exportWasmSymbols: (wasmExports) => {
-#if ENVIRONMENT_MAY_BE_NODE && ENVIRONMENT_MAY_BE_WEB
-    var global_object = (typeof process != "undefined" ? global : this);
-#elif ENVIRONMENT_MAY_BE_NODE
-    var global_object = global;
-#else
-    var global_object = this;
+  // When DECLARE_ASM_MODULE_EXPORTS is set, this function is programmatically
+  // created during linking.  See `create_receiving` in `emscripten.py`.
+  // When DECLARE_ASM_MODULE_EXPORTS=0 is set, `assignWasmExports` is instead
+  // defined here as a normal JS library function.
+  $assignWasmExports__deps: ['$asmjsMangle',
+#if DYNCALLS || !WASM_BIGINT
+    , '$dynCalls'
 #endif
-
-    for (var __exportedFunc in wasmExports) {
-      var jsname = asmjsMangle(__exportedFunc);
-#if MINIMAL_RUNTIME
-      global_object[jsname] = wasmExports[__exportedFunc];
+  ],
+  $assignWasmExports: (wasmExports) => {
+    for (var [name, exportedSymbol] of Object.entries(wasmExports)) {
+      name = asmjsMangle(name);
+#if DYNCALLS || !WASM_BIGINT
+      if (name.startsWith('dynCall_')) {
+        dynCalls[name.substr(8)] = exportedSymbol;
+      }
+#endif
+      // Special handling for Wasm globals.  See `create_receiving` for the
+      // static version of this code.
+      if (typeof exportedSymbol.value !== 'undefined') {
+#if MEMORY64
+        exportedSymbol = Number(exportedSymbol.value);
 #else
-      global_object[jsname] = Module[jsname] = wasmExports[__exportedFunc];
+        exportedSymbol = exportedSymbol.value
+#endif
+      }
+#if MINIMAL_RUNTIME
+      globalThis[name] = exportedSymbol;
+#else
+      globalThis[name] = Module[name] = exportedSymbol;
 #endif
     }
-
+    exportAliases(wasmExports);
   },
 #endif
 
   // Parses as much of the given JS string to an integer, with quiet error
-  // handling (returns a NaN on error). E.g. jstoi_q("123abc") returns 123.
-  // Note that "smart" radix handling is employed for input string:
-  // "0314" is parsed as octal, and "0x1234" is parsed as base-16.
+  // handling (returns a NaN on error). E.g. jstoi_q('123abc') returns 123.
+  // Note that 'smart' radix handling is employed for input string:
+  // '0314' is parsed as octal, and '0x1234' is parsed as base-16.
   $jstoi_q__docs: '/** @suppress {checkTypes} */',
   $jstoi_q: (str) => parseInt(str),
 
-#if LINK_AS_CXX
-  // libunwind
 
-  _Unwind_Backtrace__deps: ['$getCallstack'],
-  _Unwind_Backtrace: (func, arg) => {
-    var trace = getCallstack();
-    var parts = trace.split('\n');
-    for (var i = 0; i < parts.length; i++) {
-      var ret = {{{ makeDynCall('iii', 'func') }}}(0, arg);
-      if (ret !== 0) return;
-    }
-  },
-
-  _Unwind_GetIPInfo: (context, ipBefore) => abort('Unwind_GetIPInfo'),
-
-  _Unwind_FindEnclosingFunction: (ip) => 0, // we cannot succeed
-
-  _Unwind_RaiseException__deps: ['__cxa_throw'],
-  _Unwind_RaiseException: (ex) => {
-    err('Warning: _Unwind_RaiseException is not correctly implemented');
-    return ___cxa_throw(ex, 0, 0);
-  },
-
-  _Unwind_DeleteException: (ex) => err('TODO: Unwind_DeleteException'),
-#endif
 
   // special runtime support
 
@@ -1679,31 +1787,24 @@ addToLibrary({
       return process.argv[1].replace(/\\/g, '/');
     }
 #endif
-    return "./this.program";
+    return './this.program';
   },
 #else
-  $getExecutableName: () => thisProgram || './this.program',
+  $getExecutableName: () => thisProgram,
 #endif
 
   // Receives a Web Audio context plus a set of elements to listen for user
   // input events on, and registers a context resume() for them. This lets
   // audio work properly in an automatic way, as browsers won't let audio run
   // without user interaction.
-  // If @elements is not provided, we default to the document and canvas
-  // elements, which handle common use cases.
-  // TODO(sbc): Remove seemingly unused elements argument
-  $autoResumeAudioContext__docs: '/** @param {Object=} elements */',
-  $autoResumeAudioContext: (ctx, elements) => {
-    if (!elements) {
-      elements = [document, document.getElementById('canvas')];
-    }
-    ['keydown', 'mousedown', 'touchstart'].forEach((event) => {
-      elements.forEach((element) => {
+  $autoResumeAudioContext: (ctx) => {
+    for (var event of ['keydown', 'mousedown', 'touchstart']) {
+      for (var element of [document, document.getElementById('canvas')]) {
         element?.addEventListener(event, () => {
           if (ctx.state === 'suspended') ctx.resume();
         }, { 'once': true });
-      });
-    });
+      }
+    }
   },
 
 #if DYNCALLS || !WASM_BIGINT
@@ -1731,11 +1832,14 @@ addToLibrary({
     var f = dynCalls[sig];
     return f(ptr, ...args);
   },
-#if DYNCALLS
-  $dynCall__deps: ['$dynCallLegacy'],
-#else
-  $dynCall__deps: ['$getWasmTableEntry'],
+  $dynCall__deps: [
+#if DYNCALLS || !WASM_BIGINT
+    '$dynCallLegacy',
 #endif
+#if !DYNCALLS
+    '$getWasmTableEntry',
+#endif
+  ],
 #endif
 
   // Used in library code to get JS function from wasm function pointer.
@@ -1750,6 +1854,9 @@ addToLibrary({
   },
 
   $dynCall: (sig, ptr, args = [], promising = false) => {
+#if ASSERTIONS
+    assert(ptr, `null function pointer in dynCall`);
+#endif
 #if ASSERTIONS && (DYNCALLS || !WASM_BIGINT || !JSPI)
     assert(!promising, 'async dynCall is not supported in this mode')
 #endif
@@ -1850,7 +1957,7 @@ addToLibrary({
     }
 #if ASSERTIONS && ASYNCIFY != 2 // With JSPI the function stored in the table will be a wrapper.
     /** @suppress {checkTypes} */
-    assert(wasmTable.get({{{ toIndexType('funcPtr') }}}) == func, 'JavaScript-side Wasm function table mirror is out of date!');
+    assert(wasmTable.get({{{ toIndexType('funcPtr') }}}) == func, 'table mirror is out of date');
 #endif
     return func;
   },
@@ -1925,44 +2032,17 @@ addToLibrary({
   _emscripten_get_progname__deps: ['$getExecutableName', '$stringToUTF8'],
   _emscripten_get_progname: (str, len) => stringToUTF8(getExecutableName(), str, len),
 
-  emscripten_console_log: (str) => {
-#if ASSERTIONS
-    assert(typeof str == 'number');
-#endif
-    console.log(UTF8ToString(str));
-  },
+  // These single-line arrow functions use curly braces since otherwise closure
+  // compiler will inject a extra `return` keyword when inlining.
+  // https://github.com/emscripten-core/emscripten/issues/26922
+  emscripten_console_log: (str) => { console.log(UTF8ToString(str)) },
+  emscripten_console_warn: (str) => { console.warn(UTF8ToString(str)) },
+  emscripten_console_error: (str) => { console.error(UTF8ToString(str)) },
+  emscripten_console_trace: (str) => { console.trace(UTF8ToString(str)) },
 
-  emscripten_console_warn: (str) => {
-#if ASSERTIONS
-    assert(typeof str == 'number');
-#endif
-    console.warn(UTF8ToString(str));
-  },
+  emscripten_throw_number: (number) => { throw number; },
 
-  emscripten_console_error: (str) => {
-#if ASSERTIONS
-    assert(typeof str == 'number');
-#endif
-    console.error(UTF8ToString(str));
-  },
-
-  emscripten_console_trace: (str) => {
-#if ASSERTIONS
-    assert(typeof str == 'number');
-#endif
-    console.trace(UTF8ToString(str));
-  },
-
-  emscripten_throw_number: (number) => {
-    throw number;
-  },
-
-  emscripten_throw_string: (str) => {
-#if ASSERTIONS
-    assert(typeof str == 'number');
-#endif
-    throw UTF8ToString(str);
-  },
+  emscripten_throw_string: (str) => { throw UTF8ToString(str); },
 
 #if !MINIMAL_RUNTIME
 #if STACK_OVERFLOW_CHECK
@@ -1987,6 +2067,9 @@ addToLibrary({
         err('Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to {{{ STACK_SIZE }}})');
       }
     }
+#endif
+#if RUNTIME_DEBUG
+    dbg(`handleException: got unexpected exception ${e}, calling quit_`)
 #endif
     quit_(1, e);
   },
@@ -2045,7 +2128,7 @@ addToLibrary({
   // as ExitStatus and 'unwind' and prevent these from escaping to the top
   // level.
   $callUserCallback__deps: ['$handleException', '$maybeExit'],
-  $callUserCallback: (func) => {
+  $callUserCallback: (func, ...args) => {
 #if EXIT_RUNTIME
     if (runtimeExited || ABORT) {
 #else
@@ -2057,10 +2140,11 @@ addToLibrary({
       return;
     }
     try {
-      func();
-      maybeExit();
+      return func(...args);
     } catch (e) {
       handleException(e);
+    } finally {
+      maybeExit();
     }
   },
 
@@ -2087,26 +2171,19 @@ addToLibrary({
 #endif
       try {
 #if PTHREADS
-        if (ENVIRONMENT_IS_PTHREAD) __emscripten_thread_exit(EXITSTATUS);
-        else
+        if (ENVIRONMENT_IS_PTHREAD) {
+          // exit the current thread, but only if there is one active.
+          // TODO(https://github.com/emscripten-core/emscripten/issues/25076):
+          // Unify this check with the runtimeExited check above
+          if (_pthread_self()) __emscripten_thread_exit(EXITSTATUS);
+          return;
+        }
 #endif
         _exit(EXITSTATUS);
       } catch (e) {
         handleException(e);
       }
     }
-  },
-
-#else // MINIMAL_RUNTIME
-  // MINIMAL_RUNTIME doesn't support the runtimeKeepalive stuff
-  $callUserCallback: (func) => func(),
-#endif // MINIMAL_RUNTIME
-
-  $asmjsMangle: (x) => {
-    if (x == '__main_argc_argv') {
-      x = 'main';
-    }
-    return x.startsWith('dynCall_') ? x : '_' + x;
   },
 
   $asyncLoad: async (url) => {
@@ -2117,9 +2194,36 @@ addToLibrary({
     return new Uint8Array(arrayBuffer);
   },
 
+#else // MINIMAL_RUNTIME
+  $callUserCallback: (func, ...args) => {
+    // MINIMAL_RUNTIME doesn't support the runtimeKeepalive stuff, but under
+    // some circumstances it supportes `runtimeExited`
+#if EXIT_RUNTIME
+    if (runtimeExited) {
+#if ASSERTIONS
+      err('user callback triggered after runtime exited or application aborted.  Ignoring.');
+#endif
+      return;
+    }
+#endif
+    func(...args);
+  },
+#endif // MINIMAL_RUNTIME
+
+  $asmjsMangle: (x) => {
+    if (x == '__main_argc_argv') {
+      x = 'main';
+    }
+#if DYNCALLS
+    return x.startsWith('dynCall_') ? x : '_' + x;
+#else
+    return '_' + x;
+#endif
+  },
+
   $alignMemory: (size, alignment) => {
 #if ASSERTIONS
-    assert(alignment, "alignment argument is required");
+    assert(alignment, 'alignment argument is required');
 #endif
     return Math.ceil(size / alignment) * alignment;
   },
@@ -2142,42 +2246,6 @@ addToLibrary({
 #endif
   },
 
-#if RELOCATABLE
-  // Globals that are normally exported from the wasm module but in relocatable
-  // mode are created here and imported by the module.
-  __stack_pointer: "new WebAssembly.Global({'value': '{{{ POINTER_WASM_TYPE }}}', 'mutable': true}, {{{ to64(STACK_HIGH) }}})",
-  // tell the memory segments where to place themselves
-  __memory_base: "new WebAssembly.Global({'value': '{{{ POINTER_WASM_TYPE }}}', 'mutable': false}, {{{ to64(GLOBAL_BASE) }}})",
-  // the wasm backend reserves slot 0 for the NULL function pointer
-  __table_base: "new WebAssembly.Global({'value': '{{{ POINTER_WASM_TYPE }}}', 'mutable': false}, {{{ to64(TABLE_BASE) }}})",
-#if MEMORY64 == 2
-  __memory_base32: "new WebAssembly.Global({'value': 'i32', 'mutable': false}, {{{ GLOBAL_BASE }}})",
-#endif
-#if MEMORY64
-  __table_base32: {{{ TABLE_BASE }}},
-#endif
-  // To support such allocations during startup, track them on __heap_base and
-  // then when the main module is loaded it reads that value and uses it to
-  // initialize sbrk (the main module is relocatable itself, and so it does not
-  // have __heap_base hardcoded into it - it receives it from JS as an extern
-  // global, basically).
-  __heap_base: '{{{ HEAP_BASE }}}',
-  __stack_high: '{{{ STACK_HIGH }}}',
-  __stack_low: '{{{ STACK_LOW }}}',
-  __global_base: '{{{ GLOBAL_BASE }}}',
-#if WASM_EXCEPTIONS
-  // In dynamic linking we define tags here and feed them to each module
-  __cpp_exception: "new WebAssembly.Tag({'parameters': ['{{{ POINTER_WASM_TYPE }}}']})",
-#endif
-#if SUPPORT_LONGJMP == 'wasm'
-  __c_longjmp: "new WebAssembly.Tag({'parameters': ['{{{ POINTER_WASM_TYPE }}}']})",
-#endif
-#if ASYNCIFY == 1
-  __asyncify_state: "new WebAssembly.Global({'value': 'i32', 'mutable': true}, 0)",
-  __asyncify_data: "new WebAssembly.Global({'value': '{{{ POINTER_WASM_TYPE }}}', 'mutable': true}, {{{ to64(0) }}})",
-#endif
-#endif // RELOCATABLE
-
   _emscripten_fs_load_embedded_files__deps: ['$FS', '$PATH'],
   _emscripten_fs_load_embedded_files: (ptr) => {
 #if RUNTIME_DEBUG
@@ -2196,7 +2264,7 @@ addToLibrary({
 #endif
       FS.createPath('/', PATH.dirname(name), true, true);
       // canOwn this data in the filesystem, it is a slice of wasm memory that will never change
-      FS.createDataFile(name, null, HEAP8.subarray(content, content + len), true, true, true);
+      FS.createDataFile(name, null, HEAP8.subarray(content, content + len), true, true, /*canOwn=*/true);
     } while ({{{ makeGetValue('ptr', '0', '*') }}});
 #if RUNTIME_DEBUG
     dbg('done preloading data files');
@@ -2216,7 +2284,7 @@ addToLibrary({
       return this.allocated[id] !== undefined;
     }
     allocate(handle) {
-      var id = this.freelist.pop() || this.allocated.length;
+      var id = this.freelist.pop() ?? this.allocated.length;
       this.allocated[id] = handle;
       return id;
     }
@@ -2231,25 +2299,16 @@ addToLibrary({
     }
   },
 
-  $getNativeTypeSize__deps: ['$POINTER_SIZE'],
-  $getNativeTypeSize: {{{ getNativeTypeSize }}},
-
+  // `wasmTable` is a JS alias for the Wasm `__indirect_function_table` export
   $wasmTable__docs: '/** @type {WebAssembly.Table} */',
-#if RELOCATABLE
-  // In RELOCATABLE mode we create the table in JS.
-  $wasmTable: `=new WebAssembly.Table({
-  'initial': {{{ toIndexType(INITIAL_TABLE) }}},
-#if !ALLOW_TABLE_GROWTH
-  'maximum': {{{ toIndexType(INITIAL_TABLE) }}},
-#endif
-#if MEMORY64 == 1
-  'address': 'i64',
-#endif
-  'element': 'anyfunc'
-});
-`,
+  $wasmTable: '__indirect_function_table',
+
+#if IMPORTED_MEMORY
+  // This gets defined in src/runtime_init_memory.js
+  $wasmMemory: undefined,
 #else
-  $wasmTable: undefined,
+  // `wasmMemory` is a JS alias for the Wasm `memory` export
+  $wasmMemory: 'memory',
 #endif
 
   $getUniqueRunDependency: (id) => {
@@ -2266,6 +2325,116 @@ addToLibrary({
 
   $noExitRuntime__postset: () => addAtModule(makeModuleReceive('noExitRuntime')),
   $noExitRuntime: {{{ !EXIT_RUNTIME }}},
+
+#if !MINIMAL_RUNTIME
+  // A counter of dependencies for calling run(). If we need to
+  // do asynchronous work before running, increment this and
+  // decrement it. Incrementing must happen in a place like
+  // Module.preRun (used by emcc to add file preloading).
+  // Note that you can add dependencies in preRun, even though
+  // it happens right before run - run will be postponed until
+  // the dependencies are met.
+  $runDependencies__internal: true,
+  $runDependencies__deps: ['$resolveRunDependencies'],
+  $runDependencies: 0,
+  $dependenciesPromise__internal: true,
+  $dependenciesPromise: null,
+  $dependenciesPromiseResolve__internal: true,
+  $dependenciesPromiseResolve: null,
+  $resolveRunDependencies__internal: true,
+  $resolveRunDependencies__deps: ['$dependenciesPromise'],
+  $resolveRunDependencies: async () => dependenciesPromise,
+#if ASSERTIONS
+  $runDependencyTracking__internal: true,
+  $runDependencyTracking: {},
+  $runDependencyWatcher__internal: true,
+  $runDependencyWatcher: null,
+#endif
+
+  $addRunDependency__deps: ['$runDependencies', '$removeRunDependency', '$dependenciesPromise', '$dependenciesPromiseResolve',
+#if ASSERTIONS
+    '$runDependencyTracking',
+    '$runDependencyWatcher',
+#endif
+  ],
+  $addRunDependency: (id) => {
+    if (!runDependencies) {
+      dependenciesPromise = new Promise((resolve) => dependenciesPromiseResolve = resolve);
+    }
+    runDependencies++;
+
+#if expectToReceiveOnModule('monitorRunDependencies')
+    Module['monitorRunDependencies']?.(runDependencies);
+#endif
+
+#if ASSERTIONS
+#if RUNTIME_DEBUG
+    dbg('addRunDependency', id);
+#endif
+    assert(id, 'addRunDependency requires an ID')
+    assert(!runDependencyTracking[id]);
+    runDependencyTracking[id] = 1;
+    if (!runDependencyWatcher && globalThis.setInterval) {
+      // Check for missing dependencies every few seconds
+      runDependencyWatcher = setInterval(() => {
+        if (ABORT) {
+          clearInterval(runDependencyWatcher);
+          runDependencyWatcher = null;
+          return;
+        }
+        var shown = false;
+        for (var dep in runDependencyTracking) {
+          if (!shown) {
+            shown = true;
+            err('still waiting on run dependencies:');
+          }
+          err(`dependency: ${dep}`);
+        }
+        if (shown) {
+          err('(end of list)');
+        }
+      }, 10_000);
+#if ENVIRONMENT_MAY_BE_NODE
+      // Prevent this timer from keeping the runtime alive if nothing
+      // else is.
+      runDependencyWatcher.unref?.()
+#endif
+    }
+#endif
+  },
+
+  $removeRunDependency__deps: ['$runDependencies', '$dependenciesPromiseResolve',
+#if ASSERTIONS
+    '$runDependencyTracking',
+    '$runDependencyWatcher',
+#endif
+  ],
+  $removeRunDependency: (id) => {
+    runDependencies--;
+
+#if expectToReceiveOnModule('monitorRunDependencies')
+    Module['monitorRunDependencies']?.(runDependencies);
+#endif
+
+#if ASSERTIONS
+#if RUNTIME_DEBUG
+    dbg('removeRunDependency', id);
+#endif
+    assert(id, 'removeRunDependency requires an ID');
+    assert(runDependencyTracking[id]);
+    delete runDependencyTracking[id];
+#endif
+    if (!runDependencies) {
+#if ASSERTIONS
+      if (runDependencyWatcher !== null) {
+        clearInterval(runDependencyWatcher);
+        runDependencyWatcher = null;
+      }
+#endif
+      dependenciesPromiseResolve();
+    }
+  },
+#endif
 
   // The following addOn<X> functions are for adding runtime callbacks at
   // various executions points. Each addOn<X> function has a corresponding
@@ -2300,7 +2469,12 @@ addToLibrary({
     ATPOSTCTORS.unshift('callRuntimeCallbacks(onPostCtors);');
   },
   $addOnPostCtor__deps: ['$onPostCtors'],
-  $addOnPostCtor: (cb) => onPostCtors.push(cb),
+  $addOnPostCtor: (cb) => {
+#if ASSERTIONS
+    assert(!runtimeInitialized, 'addOnPostCtor called too late: ctors have already run');
+#endif
+    onPostCtors.push(cb);
+  },
   // See ATMAINS in parseTools.mjs for more information.
   $onMains: [],
   $onMains__internal: true,
@@ -2338,13 +2512,11 @@ addToLibrary({
   $ASSERTIONS: {{{ ASSERTIONS }}},
 });
 
-function autoAddDeps(object, name) {
-  for (var item in object) {
-    if (!item.endsWith('__deps')) {
-      if (!object[item + '__deps']) {
-        object[item + '__deps'] = [];
-      }
-      object[item + '__deps'].push(name);
+function autoAddDeps(lib, name) {
+  for (const item of Object.keys(lib)) {
+    if (!isDecorator(item)) {
+      lib[item + '__deps'] ??= [];
+      lib[item + '__deps'].push(name);
     }
   }
 }
@@ -2352,12 +2524,9 @@ function autoAddDeps(object, name) {
 #if LEGACY_RUNTIME
 // Library functions that were previously included as runtime functions are
 // automatically included when `LEGACY_RUNTIME` is set.
-extraLibraryFuncs.push(
+for (const symbol of [
   '$addFunction',
   '$removeFunction',
-  '$allocate',
-  '$ALLOC_NORMAL',
-  '$ALLOC_STACK',
   '$AsciiToString',
   '$stringToAscii',
   '$UTF16ToString',
@@ -2382,7 +2551,9 @@ extraLibraryFuncs.push(
   '$stringToUTF8Array',
   '$stringToUTF8',
   '$lengthBytesUTF8',
-);
+]) {
+  addToLibrary({[symbol + '__force']: true}, {allowMissing: true});
+}
 #endif
 
 function wrapSyscallFunction(x, library, isWasi) {
@@ -2391,7 +2562,7 @@ function wrapSyscallFunction(x, library, isWasi) {
   }
 
   var t = library[x];
-  if (typeof t == 'string') return;
+  if (typeof t === 'string') return;
   t = t.toString();
 
   // If a syscall uses FS, but !SYSCALLS_REQUIRE_FILESYSTEM, then the user
@@ -2407,15 +2578,15 @@ function wrapSyscallFunction(x, library, isWasi) {
   }
 
   var isVariadic = !isWasi && t.includes(', varargs');
-#if SYSCALLS_REQUIRE_FILESYSTEM == 0
-  var canThrow = false;
-#else
+#if SYSCALLS_REQUIRE_FILESYSTEM
   var canThrow = library[x + '__nothrow'] !== true;
+#else
+  var canThrow = false;
 #endif
 
   library[x + '__deps'] ??= [];
 
-#if PURE_WASI
+#if PURE_WASI && GROWABLE_ARRAYBUFFERS != 2
   // In PURE_WASI mode we can't assume the wasm binary was built by emscripten
   // and politely notify us on memory growth.  Instead we have to check for
   // possible memory growth on each syscall.
@@ -2438,43 +2609,45 @@ function wrapSyscallFunction(x, library, isWasi) {
     }
   }
   pre += `dbg('syscall! ${x}: [' + Array.prototype.slice.call(arguments) + ']');\n`;
-  pre += "var canWarn = true;\n";
-  pre += "var ret = (() => {";
-  post += "})();\n";
-  post += "if (ret && ret < 0 && canWarn) {\n";
-  post += "  dbg(`error: syscall may have failed with ${-ret} (${strError(-ret)})`);\n";
-  post += "}\n";
-  post += "dbg(`syscall return: ${ret}`);\n";
-  post += "return ret;\n";
+  pre += 'var canWarn = true;\n';
+  pre += 'var ret = (() => {';
+  post += '})();\n';
+  post += 'if (ret && ret < 0 && canWarn) {\n';
+  post += '  dbg(`error: syscall may have failed with ${-ret} (${strError(-ret)})`);\n';
+  post += '}\n';
+  post += 'dbg(`syscall return: ${ret}`);\n';
+  post += 'return ret;\n';
+  // Emit dependency to strError() since we added use of it above.
+  library[x + '__deps'].push('$strError');
 #endif
   delete library[x + '__nothrow'];
   var handler = '';
   if (canThrow) {
     pre += 'try {\n';
     handler +=
-    "} catch (e) {\n" +
-    "  if (typeof FS == 'undefined' || !(e.name === 'ErrnoError')) throw e;\n";
+    '} catch (e) {\n' +
+    "  if (typeof FS === 'undefined' || !(e.name === 'ErrnoError')) throw e;\n";
 #if SYSCALL_DEBUG
     handler +=
-    "  dbg(`error: syscall failed with ${e.errno} (${strError(e.errno)})`);\n" +
-    "  canWarn = false;\n";
+    '  dbg(`error: syscall failed with ${e.errno} (${strError(e.errno)})`);\n' +
+    '  canWarn = false;\n';
 #endif
     // Musl syscalls are negated.
     if (isWasi) {
-      handler += "  return e.errno;\n";
+      handler += '  return e.errno;\n';
     } else {
       // Musl syscalls are negated.
-      handler += "  return -e.errno;\n";
+      handler += '  return -e.errno;\n';
     }
-    handler += "}\n";
+    handler += '}\n';
   }
   post = handler + post;
 
   if (pre || post) {
-    t = modifyJSFunction(t, (args, body) => `function (${args}) {\n${pre}${body}${post}}\n`);
+    t = modifyJSFunction(t, (args, body, async_) => `${async_}function (${args}) {\n${pre}${body}${post}}\n`);
   }
 
-  library[x] = eval('(' + t + ')');
+  library[x] = t;
   // Automatically add dependency on `$SYSCALLS`
   if (!WASMFS && t.includes('SYSCALLS')) {
     library[x + '__deps'].push('$SYSCALLS');
@@ -2489,8 +2662,6 @@ function wrapSyscallFunction(x, library, isWasi) {
   // instead of synchronously, and marked with
   //  __proxy: 'async'
   // (but essentially all syscalls do have return values).
-  if (library[x + '__proxy'] === undefined) {
-    library[x + '__proxy'] = 'sync';
-  }
+  library[x + '__proxy'] ??= 'sync';
 #endif
 }

@@ -214,7 +214,7 @@ void test_fs_rmdir() {
     } catch (err) {
     ex = err;
     }
-    assert(ex.name === "ErrnoError" && ex.errno === 44 /* ENOEN */);
+    assert(ex.name === "ErrnoError" && ex.errno === 44 /* ENOENT */);
   );
 }
 
@@ -481,5 +481,5 @@ int main() {
 
   test_fs_utime();
 
-  puts("success");
+  puts("done");
 }

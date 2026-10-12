@@ -2,41 +2,19 @@
  * @license
  * Copyright 2010 The Emscripten Authors
  * SPDX-License-Identifier: MIT
+ *
+ * Legacy library symbols that are no longer used by emscripten itself but
+ * could have external users.
+ *
+ * Symbols in this file are not available in `-sSTRICT` mode.
+ *
+ * Any usage of symbols in this file will result in a `-Wdeprecated` warning.
+ *
+ * Symbol in this file should be removed after 'enough time' has passed such
+ * that all external users have been able to transition away.
  */
 
 legacyFuncs = {
-  $ALLOC_NORMAL: 0,  // Tries to use _malloc()
-  $ALLOC_STACK: 1,  // Lives for the duration of the current function call
-
-  /**
-   * allocate(): This function is no longer used by emscripten but is kept around to avoid
-   *             breaking external users.
-   *             You should normally not use allocate(), and instead allocate
-   *             memory using _malloc()/stackAlloc(), initialize it with
-   *             setValue(), and so forth.
-   * @param {(Uint8Array|Array<number>)} slab: An array of data.
-   * @param {number=} allocator : How to allocate memory, see ALLOC_*
-   */
-  $allocate__deps: ['$ALLOC_STACK', 'malloc', '$stackAlloc'],
-  $allocate: (slab, allocator) => {
-    var ret;
-  #if ASSERTIONS
-    assert(typeof allocator == 'number', 'allocate no longer takes a type argument')
-    assert(typeof slab != 'number', 'allocate no longer takes a number as arg0')
-  #endif
-
-    if (allocator == ALLOC_STACK) {
-      ret = stackAlloc(slab.length);
-    } else {
-      ret = _malloc(slab.length);
-    }
-
-    if (!slab.subarray && !slab.slice) {
-      slab = new Uint8Array(slab);
-    }
-    HEAPU8.set(slab, ret);
-    return ret;
-  },
 
   // Deprecated: This function should not be called because it is unsafe and
   // does not provide a maximum length limit of how many bytes it is allowed to
@@ -73,8 +51,10 @@ legacyFuncs = {
     if (!dontAddNull) {{{ makeSetValue('buffer', 0, 0, 'i8') }}};
   },
 
-  $allocateUTF8: '$stringToNewUTF8',
-  $allocateUTF8OnStack: '$stringToUTF8OnStack',
+  $allocateUTF8__deps: ['$stringToNewUTF8'],
+  $allocateUTF8: (...args) => stringToNewUTF8(...args),
+  $allocateUTF8OnStack__deps: ['$stringToUTF8OnStack'],
+  $allocateUTF8OnStack: (...args) => stringToUTF8OnStack(...args),
 
 #if LINK_AS_CXX
   $demangle__deps: ['$withStackSave', '__cxa_demangle', 'free', '$stringToUTF8OnStack'],
@@ -109,26 +89,47 @@ legacyFuncs = {
   $stackTrace__deps: ['$jsStackTrace'],
   $stackTrace: () => {
     var js = jsStackTrace();
+#if expectToReceiveOnModule('extraStackTrace')
     if (Module['extraStackTrace']) js += '\n' + Module['extraStackTrace']();
+#endif
     return js;
   },
 
   // Legacy names for runtime `out`/`err` symbols.
-  $print: 'out',
-  $printErr: 'err',
+  $print: '=out',
+  $printErr: '=err',
 
   // Converts a JS string to an integer base-10. Despite _s, which
   // suggests signaling error handling, this returns NaN on error.
   // (This was a mistake in the original implementation, and kept
   // to avoid breakage.)
   $jstoi_s: 'Number',
+
+  $getNativeTypeSize__deps: ['$POINTER_SIZE'],
+  $getNativeTypeSize: {{{ getNativeTypeSize }}},
+
+#if EMBIND
+  $getInheritedInstanceCount__deps: ['$registeredInstances'],
+  $getInheritedInstanceCount: () => Object.keys(registeredInstances).length,
+
+  $getLiveInheritedInstances__deps: ['$registeredInstances'],
+  $getLiveInheritedInstances: () => {
+    var rv = [];
+    for (var k in registeredInstances) {
+      if (registeredInstances.hasOwnProperty(k)) {
+        rv.push(registeredInstances[k]);
+      }
+    }
+    return rv;
+  },
+#endif
 };
 
 if (WARN_DEPRECATED && !INCLUDE_FULL_LIBRARY) {
   for (const name of Object.keys(legacyFuncs)) {
     if (!isDecorator(name)) {
-      depsKey = `${name}__deps`;
-      legacyFuncs[depsKey] = legacyFuncs[depsKey] || [];
+      const depsKey = `${name}__deps`;
+      legacyFuncs[depsKey] ??= []
       legacyFuncs[depsKey].push(() => {
         warn(`JS library symbol '${name}' is deprecated. Please open a bug if you have a continuing need for this symbol [-Wdeprecated]`);
       });

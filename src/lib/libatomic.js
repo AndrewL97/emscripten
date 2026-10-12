@@ -22,7 +22,9 @@ addToLibrary({
   //   https://github.com/tc39/proposal-atomics-wait-async/blob/master/PROPOSAL.md
   // This polyfill performs polling with setTimeout() to observe a change in the
   // target memory location.
-  $polyfillWaitAsync__postset: `if (!Atomics.waitAsync || (typeof navigator != 'undefined' && navigator.userAgent && Number((navigator.userAgent.match(/Chrom(e|ium)\\/([0-9]+)\\./)||[])[2]) < 91)) {
+  $waitAsyncPolyfilled: '=(!Atomics.waitAsync || (globalThis.navigator?.userAgent && Number((navigator.userAgent.match(/Chrom(e|ium)\\/([0-9]+)\\./)||[])[2]) < 91));',
+  $polyfillWaitAsync__deps: ['$waitAsyncPolyfilled'],
+  $polyfillWaitAsync__postset: `if (waitAsyncPolyfilled) {
   let __Atomics_waitAsyncAddresses = [/*[i32a, index, value, maxWaitMilliseconds, promiseResolve]*/];
   function __Atomics_pollWaitAsyncAddresses() {
     let now = performance.now();
@@ -45,21 +47,18 @@ addToLibrary({
   #if ASSERTIONS && WASM_WORKERS
     if (!ENVIRONMENT_IS_WASM_WORKER) err('Current environment does not support Atomics.waitAsync(): polyfilling it, but this is going to be suboptimal.');
   #endif
-  /**
-   * @param {number=} maxWaitMilliseconds
-   */
   Atomics.waitAsync = (i32a, index, value, maxWaitMilliseconds) => {
     let val = Atomics.load(i32a, index);
     if (val != value) return { async: false, value: 'not-equal' };
     if (maxWaitMilliseconds <= 0) return { async: false, value: 'timed-out' };
     maxWaitMilliseconds = performance.now() + (maxWaitMilliseconds || Infinity);
-    let promiseResolve;
-    let promise = new Promise((resolve) => { promiseResolve = resolve; });
     if (!__Atomics_waitAsyncAddresses[0]) setTimeout(__Atomics_pollWaitAsyncAddresses, 10);
-    __Atomics_waitAsyncAddresses.push([i32a, index, value, maxWaitMilliseconds, promiseResolve]);
+    let promise = new Promise((resolve) => __Atomics_waitAsyncAddresses.push([i32a, index, value, maxWaitMilliseconds, resolve]));
     return { async: true, value: promise };
   };
 }`,
+#else
+  $waitAsyncPolyfilled: false,
 #endif
 
   $polyfillWaitAsync__internal: true,
@@ -68,6 +67,25 @@ addToLibrary({
     // included exactly once and only included when needed.
     // Any function using Atomics.waitAsync should depend on this.
   },
+
+#if ASYNCIFY
+  _emscripten_atomic_wait_promise__deps: ['$polyfillWaitAsync', '$atomicWaitStates', '$addPromise'],
+  _emscripten_atomic_wait_promise: (addr, val, maxWaitMilliseconds) => {
+    var wait = Atomics.waitAsync(HEAP32, {{{ getHeapOffset('addr', 'i32') }}}, val, maxWaitMilliseconds);
+    if (wait.async) {
+      // In the async case return the promise ID.
+      var chainedPromise = wait.value.then((value) => atomicWaitStates.indexOf(value));
+      var id = addPromise(chainedPromise);
+      return id;
+    }
+    // In the synchronous case return the negative result code
+    return -atomicWaitStates.indexOf(wait.value);
+  },
+#else
+  _emscripten_atomic_wait_promise: (addr, val, maxWaitMilliseconds) => {
+    abort('Please compile your program with async support in order to use asynchronous operations like emscripten_atomic_wait_suspending');
+  },
+#endif
 
   $atomicWaitStates__internal: true,
   $atomicWaitStates: ['ok', 'not-equal', 'timed-out'],
@@ -83,7 +101,7 @@ addToLibrary({
     // Increment waitAsync generation counter, account for wraparound in case
     // application does huge amounts of waitAsyncs per second (not sure if
     // possible?)
-    // Valid counterrange: 0...2^31-1
+    // Valid counter range: 0...2^31-1
     let counter = liveAtomicWaitAsyncCounter;
     liveAtomicWaitAsyncCounter = Math.max(0, (liveAtomicWaitAsyncCounter+1)|0);
     liveAtomicWaitAsyncs[counter] = addr;
@@ -92,7 +110,7 @@ addToLibrary({
       if (liveAtomicWaitAsyncs[counter]) {
         {{{ runtimeKeepalivePop() }}}
         delete liveAtomicWaitAsyncs[counter];
-        callUserCallback(() => {{{ makeDynCall('vpiip', 'asyncWaitFinished') }}}(addr, val, atomicWaitStates.indexOf(value), userData));
+        callUserCallback({{{ makeDynCall('vpiip', 'asyncWaitFinished') }}}, addr, val, atomicWaitStates.indexOf(value), userData);
       }
     });
     return -counter;
@@ -128,9 +146,9 @@ addToLibrary({
   emscripten_atomic_cancel_all_wait_asyncs__deps: ['$liveAtomicWaitAsyncs'],
   emscripten_atomic_cancel_all_wait_asyncs: () => {
     let waitAsyncs = Object.values(liveAtomicWaitAsyncs);
-    waitAsyncs.forEach((address) => {
+    for (var address of waitAsyncs) {
       Atomics.notify(HEAP32, {{{ getHeapOffset('address', 'i32') }}});
-    });
+    }
     liveAtomicWaitAsyncs = {};
     return waitAsyncs.length;
   },
@@ -138,21 +156,23 @@ addToLibrary({
   emscripten_atomic_cancel_all_wait_asyncs_at_address__deps: ['$liveAtomicWaitAsyncs'],
   emscripten_atomic_cancel_all_wait_asyncs_at_address: (address) => {
     let numCancelled = 0;
-    Object.keys(liveAtomicWaitAsyncs).forEach((waitToken) => {
-      if (liveAtomicWaitAsyncs[waitToken] == address) {
+    for (var [waitToken, waitAddress] of Object.entries(liveAtomicWaitAsyncs)) {
+      if (waitAddress == address) {
         Atomics.notify(HEAP32, {{{ getHeapOffset('address', 'i32') }}});
         delete liveAtomicWaitAsyncs[waitToken];
         numCancelled++;
       }
-    });
+    }
     return numCancelled;
   },
 
-  emscripten_has_threading_support: () => typeof SharedArrayBuffer != 'undefined',
+  emscripten_has_threading_support: () => !!globalThis.SharedArrayBuffer,
 
   emscripten_num_logical_cores: () =>
 #if ENVIRONMENT_MAY_BE_NODE
-    ENVIRONMENT_IS_NODE ? require('os').cpus().length :
+    ENVIRONMENT_IS_NODE ? require('node:os').cpus().length :
 #endif
     navigator['hardwareConcurrency'],
+
+  emscripten_atomics_is_lock_free: (width) => Atomics.isLockFree(width),
 });

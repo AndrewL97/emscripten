@@ -4,7 +4,7 @@
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
 # found in the LICENSE file.
 
-"""This tool extracts information about structs and defines from the C headers.
+"""Tools that extracts information about structs and defines from the C headers.
 
 The JSON input format is as follows:
 [
@@ -54,58 +54,53 @@ Please note that the 'f' for 'FLOAT_DEFINE' is just the format passed to printf(
 anything printf() understands.
 """
 
-import sys
+import argparse
+import json
 import os
 import re
-import json
-import argparse
-import tempfile
 import shlex
 import subprocess
-import typing
+import sys
+import tempfile
 
 __scriptdir__ = os.path.dirname(os.path.abspath(__file__))
 __rootdir__ = os.path.dirname(__scriptdir__)
 sys.path.insert(0, __rootdir__)
 
-from tools import building
-from tools import config
-from tools import shared
-from tools import system_libs
-from tools import utils
+from tools import config, shared, system_libs, utils
 
 QUIET = (__name__ != '__main__')
 DEBUG = False
 
 CFLAGS = [
-    # Avoid parsing problems due to gcc specific syntax.
-    '-D_GNU_SOURCE',
+  # Avoid parsing problems due to gcc specific syntax.
+  '-D_GNU_SOURCE',
 ]
 
 INTERNAL_CFLAGS = [
-    '-I' + utils.path_from_root('system/lib/libc/musl/src/internal'),
-    '-I' + utils.path_from_root('system/lib/libc/musl/src/include'),
-    '-I' + utils.path_from_root('system/lib/pthread/'),
+  '-I' + utils.path_from_root('system/lib/libc/musl/arch/emscripten'),
+  '-I' + utils.path_from_root('system/lib/libc/musl/arch/generic'),
+  '-I' + utils.path_from_root('system/lib/libc/musl/src/internal'),
+  '-I' + utils.path_from_root('system/lib/libc/musl/src/include'),
+  '-I' + utils.path_from_root('system/lib/pthread/'),
 ]
 
 CXXFLAGS = [
-    '-I' + utils.path_from_root('system/lib/libcxxabi/src'),
-    '-D__EMSCRIPTEN_EXCEPTIONS__',
-    '-I' + utils.path_from_root('system/lib/wasmfs/'),
-    '-std=c++17',
+  '-I' + utils.path_from_root('system/lib/libcxxabi/src'),
+  '-D__EMSCRIPTEN_EXCEPTIONS__',
+  '-I' + utils.path_from_root('system/lib/wasmfs/'),
 ]
 
 DEFAULT_JSON_FILES = [
-    utils.path_from_root('src/struct_info.json'),
-    utils.path_from_root('src/struct_info_internal.json'),
-    utils.path_from_root('src/struct_info_cxx.json'),
-    utils.path_from_root('src/struct_info_webgpu.json'),
+  utils.path_from_root('src/struct_info.json'),
+  utils.path_from_root('src/struct_info_internal.json'),
+  utils.path_from_root('src/struct_info_cxx.json'),
 ]
 
 
-def show(msg):
+def show(msg, *args):
   if shared.DEBUG or not QUIET:
-    sys.stderr.write('gen_struct_info: %s\n' % msg)
+    print('gen_struct_info:', msg, *args, file=sys.stderr)
 
 
 # The Scope class generates C code which, in turn, outputs JSON.
@@ -116,7 +111,7 @@ def show(msg):
 #     scope.set('item2', '%f', '4.2') # generates code that outputs ',\n"item2": 4.2'
 #   # once the scope is exited, it generates code that outputs the end of the JSON object '\n}'
 class Scope:
-  def __init__(self, code: typing.List[str]):
+  def __init__(self, code: list[str]):
     self.code = code
     self.has_data = False
 
@@ -124,7 +119,7 @@ class Scope:
     self.code.append('puts("{");')
     return self
 
-  def __exit__(self, exc_type, exc_val, exc_tb):
+  def __exit__(self, _exc_type, _exc_val, _exc_tb):
     if self.has_data:
       self.code.append('puts("");')
     self.code.append('printf("}");')
@@ -152,7 +147,7 @@ class Scope:
 
     self.code.append(f'printf("{type_}", {value});')
 
-  def gen_inspect_code(self, path: typing.List[str], struct: typing.List[typing.Union[str, dict]]):
+  def gen_inspect_code(self, path: list[str], struct: list[str | dict]):
     if path[0][-1] == '#':
       path[0] = path[0].rstrip('#')
       prefix = ''
@@ -161,16 +156,17 @@ class Scope:
     prefix += path[0]
 
     with self.child(path[-1]) as scope:
-      path_for_sizeof = [f'({prefix}){{}}'] + path[1:]
+      path_for_sizeof = [f'({prefix}){{}}', *path[1:]]
       scope.set('__size__', '%zu', f'sizeof ({".".join(path_for_sizeof)})')
 
       for field in struct:
         if isinstance(field, dict):
           # We have to recurse to inspect the nested dict.
-          fname = list(field.keys())[0]
-          self.gen_inspect_code(path + [fname], field[fname])
+          fname = next(iter(field.keys()))
+          self.gen_inspect_code([*path, fname], field[fname])
         else:
-          scope.set(field, '%zu', f'offsetof({prefix}, {".".join(path[1:] + [field])})')
+          member = ".".join([*path[1:], field])
+          scope.set(field, '%zu', f'offsetof({prefix}, {member})')
 
 
 def generate_c_code(headers):
@@ -212,18 +208,17 @@ def generate_cmd(js_file_path, src_file_path, cflags):
   else:
     compiler = shared.EMCC
 
-  node_flags = building.get_emcc_node_flags(shared.check_node_version())
-
   # -O1+ produces calls to iprintf, which libcompiler_rt doesn't support
-  cmd = [compiler] + cflags + ['-o', js_file_path, src_file_path,
-                               '-O0',
-                               '-Werror',
-                               '-Wno-format',
-                               '-sBOOTSTRAPPING_STRUCT_INFO',
-                               '-sINCOMING_MODULE_JS_API=',
-                               '-sSTRICT',
-                               '-sSUPPORT_LONGJMP=0',
-                               '-sASSERTIONS=0'] + node_flags
+  cmd = [compiler, *cflags, '-o', js_file_path, src_file_path,
+         '-O0',
+         '-Werror',
+         '-Wno-format',
+         '-sBOOTSTRAPPING_STRUCT_INFO',
+         '-sWASM_ASYNC_COMPILATION=0',
+         '-sINCOMING_MODULE_JS_API=',
+         '-sSTRICT',
+         '-sSUPPORT_LONGJMP=0',
+         '-sASSERTIONS=0']
 
   # Default behavior for emcc is to warn for binaryen version check mismatches
   # so we should try to match that behavior.
@@ -253,13 +248,12 @@ def inspect_headers(headers, cflags):
   try:
     subprocess.check_call(cmd, env=system_libs.clean_env())
   except subprocess.CalledProcessError as e:
-    sys.stderr.write('FAIL: Compilation failed!: %s\n' % e.cmd)
+    sys.stderr.write(f'FAIL: Compilation failed!: {e.cmd}\n')
     sys.exit(1)
 
   # Run the compiled program.
-  show('Calling generated program... ' + js_file_path)
-  node_args = shared.node_bigint_flags(config.NODE_JS)
-  info = shared.run_js_tool(js_file_path, node_args=node_args, stdout=shared.PIPE)
+  show('Running generated program... ' + js_file_path, config.NODE_JS)
+  info = shared.run_js_tool(js_file_path, stdout=shared.PIPE)
 
   if not DEBUG:
     # Remove all temporary files.
@@ -267,7 +261,7 @@ def inspect_headers(headers, cflags):
 
     if os.path.exists(js_file_path):
       os.unlink(js_file_path)
-      wasm_file_path = shared.replace_suffix(js_file_path, '.wasm')
+      wasm_file_path = utils.replace_suffix(js_file_path, '.wasm')
       os.unlink(wasm_file_path)
 
   # Parse the output of the program into a dict.
@@ -277,12 +271,12 @@ def inspect_headers(headers, cflags):
 def merge_info(target, src):
   for key, value in src['defines'].items():
     if key in target['defines']:
-      raise Exception('duplicate define: %s' % key)
+      raise Exception(f'duplicate define: {key}')
     target['defines'][key] = value
 
   for key, value in src['structs'].items():
     if key in target['structs']:
-      raise Exception('duplicate struct: %s' % key)
+      raise Exception(f'duplicate struct: {key}')
     target['structs'][key] = value
 
 
@@ -299,7 +293,7 @@ def inspect_code(headers, cflags):
 def parse_json(path):
   header_files = []
 
-  with open(path) as stream:
+  with open(path, encoding='utf-8') as stream:
     # Remove comments before loading the JSON.
     data = json.loads(re.sub(r'//.*\n', '', stream.read()))
 
@@ -308,8 +302,8 @@ def parse_json(path):
 
   for item in data:
     for key in item:
-      if key not in ['file', 'defines', 'structs']:
-        raise 'Unexpected key in json file: %s' % key
+      if key not in {'file', 'defines', 'structs'}:
+        raise f'Unexpected key in json file: {key}'
 
     header = {'name': item['file'], 'structs': {}, 'defines': {}}
     for name, data in item.get('structs', {}).items():
@@ -367,7 +361,7 @@ def main(args):
   if args.wasm64:
     # Always use =2 here so that we don't generate a binary that actually requires
     # memory64 to run.  All we care about is that the output is correct.
-    extra_cflags += ['-sMEMORY64=2', '-Wno-experimental']
+    extra_cflags += ['-sMEMORY64=2']
 
   # Add the user options to the list as well.
   for path in args.includes:
@@ -402,7 +396,7 @@ def main(args):
   else:
     output_file = utils.path_from_root('src/struct_info_generated.json')
 
-  with open(output_file, 'w') as f:
+  with open(output_file, 'w', encoding='utf-8') as f:
     output_json(info, f)
 
   return 0

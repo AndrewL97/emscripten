@@ -36,6 +36,18 @@ var LibraryEmbind = {
       this.destructorType = 'none'; // Same as emval.
     }
   },
+  $UserTypeDefinition: class {
+    constructor(typeId, name, definition) {
+      this.typeId = typeId;
+      this.name = name;
+      this.definition = definition;
+      this.destructorType = 'none'; // Same as emval.
+    }
+
+    print(nameMap, out) {
+      out.push(`export type ${this.name} = ${this.definition};\n\n`);
+    }
+  },
   $OptionalType: class {
     constructor(type) {
       this.type = type;
@@ -121,6 +133,12 @@ var LibraryEmbind = {
         default:
           throw new Error(`Bad destructor type '${type.destructorType}'`);
       }
+      if (type.argStackAlloc) {
+        // Trivial value types stack-allocate their argument temporaries;
+        // must mirror the runtime type object so the invoker signature and
+        // generated shape match (see createJsInvokerSignature).
+        ret.argStackAlloc = true;
+      }
       return ret;
     }
 
@@ -165,6 +183,7 @@ var LibraryEmbind = {
       this.constructors = [];
       this.base = base;
       this.properties = [];
+      this.iterableElementType = null;
       this.destructorType = 'none';
       if (base) {
         this.destructorType = 'stack';
@@ -173,11 +192,16 @@ var LibraryEmbind = {
 
     print(nameMap, out) {
       out.push(`export interface ${this.name}`);
+      const extendsParts = [];
       if (this.base) {
-        out.push(` extends ${this.base.name}`);
+        extendsParts.push(this.base.name);
       } else {
-        out.push(' extends ClassHandle');
+        extendsParts.push('ClassHandle');
       }
+      if (this.iterableElementType) {
+        extendsParts.push(`Iterable<${nameMap(this.iterableElementType, true)}>`);
+      }
+      out.push(` extends ${extendsParts.join(', ')}`);
       out.push(' {\n');
       for (const property of this.properties) {
         const props = [];
@@ -279,23 +303,36 @@ var LibraryEmbind = {
   },
   $EnumDefinition: class {
     hasPublicSymbol = true;
-    constructor(typeId, name) {
+    constructor(typeId, name, valueType) {
       this.typeId = typeId;
       this.name = name;
       this.items = [];
       this.destructorType = 'none';
+      this.valueType = valueType;
     }
 
     print(nameMap, out) {
-      out.push(`export interface ${this.name}Value<T extends number> {\n`);
-      out.push('  value: T;\n}\n');
+      if (this.valueType === 'object') {
+        out.push(`export interface ${this.name}Value<T extends number> {\n`);
+        out.push('  value: T;\n}\n');
+      }
       out.push(`export type ${this.name} = `);
-      if (this.items.length === 0) {
+      if (!this.items.length) {
         out.push('never/* Empty Enumerator */');
       } else {
         const outItems = [];
         for (const [name, value] of this.items) {
-          outItems.push(`${this.name}Value<${value}>`);
+          switch (this.valueType) {
+            case 'object':
+              outItems.push(`${this.name}Value<${value}>`);
+              break;
+            case 'number':
+              outItems.push(`${value}`);
+              break;
+            case 'string':
+              outItems.push(`'${name}'`);
+              break;
+          }
         }
         out.push(outItems.join('|'));
       }
@@ -306,19 +343,34 @@ var LibraryEmbind = {
       out.push(`  ${this.name}: {`);
       const outItems = [];
       for (const [name, value] of this.items) {
-        outItems.push(`${name}: ${this.name}Value<${value}>`);
+        // Quote keys that aren't valid JS identifiers.
+        const key = /^[a-zA-Z_$][\w$]*$/.test(name) ? name : `'${name}'`;
+        switch (this.valueType) {
+          case 'object':
+            outItems.push(`${key}: ${this.name}Value<${value}>`);
+            break;
+          case 'number':
+            outItems.push(`${key}: ${value}`);
+            break;
+          case 'string':
+            outItems.push(`${key}: '${name}'`);
+            break;
+        }
       }
       out.push(outItems.join(', '));
       out.push('};\n');
     }
   },
   $ValueArrayDefinition: class {
-    constructor(typeId, name) {
+    constructor(typeId, name, isTrivial) {
       this.typeId = typeId;
       this.name = name;
       this.elementTypeIds = [];
       this.elements = [];
-      this.destructorType = 'function';
+      // Trivial types need no destructor call; their argument temporaries
+      // live in the invoker's stack frame.
+      this.destructorType = isTrivial ? 'none' : 'function';
+      this.argStackAlloc = !!isTrivial;
     }
 
     print(nameMap, out) {
@@ -332,20 +384,22 @@ var LibraryEmbind = {
     }
   },
   $ValueObjectDefinition: class {
-    constructor(typeId, name) {
+    constructor(typeId, name, isTrivial) {
       this.typeId = typeId;
       this.name = name;
       this.fieldTypeIds = [];
       this.fieldNames = [];
       this.fields = [];
-      this.destructorType = 'function';
+      // See ValueArrayDefinition: trivial types stack-allocate.
+      this.destructorType = isTrivial ? 'none' : 'function';
+      this.argStackAlloc = !!isTrivial;
     }
 
     print(nameMap, out) {
       out.push(`export type ${this.name} = {\n`);
       const outFields = [];
       for (const {name, type} of this.fields) {
-        outFields.push(`  ${name}: ${nameMap(type)}`);
+        outFields.push(`  ${name}${type instanceof OptionalType ? '?' : ''}: ${nameMap(type)}`);
       }
       out.push(outFields.join(',\n'))
       out.push('\n};\n\n');
@@ -398,10 +452,10 @@ var LibraryEmbind = {
         return tsName;
       }
       if (type instanceof PointerDefinition) {
-        return `${this.typeToJsName(type.classType)} | null`;
+        return `${this.typeToJsName(type.classType, isFromWireType)} | null`;
       }
       if (type instanceof OptionalType) {
-        return `${this.typeToJsName(type.type)} | undefined`;
+        return `${this.typeToJsName(type.type, isFromWireType)} | undefined`;
       }
       return type.name;
     }
@@ -563,6 +617,14 @@ var LibraryEmbind = {
     name = AsciiToString(name);
     registerType(rawType, new UserType(rawType, name));
   },
+  _embind_register_user_type_definition__deps: ['$registerType', '$AsciiToString', '$UserTypeDefinition'],
+  _embind_register_user_type_definition: (rawType, name, definition) => {
+    name = AsciiToString(name);
+    definition = AsciiToString(definition);
+    const userTypeDef = new UserTypeDefinition(rawType, name, definition);
+    registerType(rawType, userTypeDef);
+    moduleDefinitions.push(userTypeDef);
+  },
   _embind_register_optional__deps: ['$OptionalType'],
   _embind_register_optional: (rawOptionalType, rawType) => {
     whenDependentTypesAreResolved([rawOptionalType], [rawType], function(type) {
@@ -608,6 +670,15 @@ var LibraryEmbind = {
       }
     );
 
+  },
+  _embind_register_iterable__deps: ['$whenDependentTypesAreResolved'],
+  _embind_register_iterable: (rawClassType, rawElementType, sizeMethodName, getMethodName) => {
+    whenDependentTypesAreResolved([], [rawClassType, rawElementType], (types) => {
+      const classType = types[0];
+      const elementType = types[1];
+      classType.iterableElementType = elementType;
+      return [];
+    });
   },
   _embind_register_class_constructor__deps: ['$whenDependentTypesAreResolved', '$createFunctionDefinition'],
   _embind_register_class_constructor: function(
@@ -655,7 +726,7 @@ var LibraryEmbind = {
                                             setter,
                                             setterContext) {
     fieldName = AsciiToString(fieldName);
-    const readonly = setter === 0;
+    const readonly = !setter;
     if (!(readonly || getterReturnType === setterArgumentType)) {
       throw new error('Mismatched getter and setter types are not supported.');
     }
@@ -709,12 +780,13 @@ var LibraryEmbind = {
       return [];
     });
   },
-  // Stub function. This is called a when extending an object and not needed for TS generation.
+  // Stub function. This is called when extending an object and not needed for TS generation.
   _embind_create_inheriting_constructor: (constructorName, wrapperType, properties) => {},
-  _embind_register_enum__deps: ['$AsciiToString', '$EnumDefinition', '$moduleDefinitions'],
-  _embind_register_enum: function(rawType, name, size, isSigned) {
+  _embind_register_enum__deps: ['$AsciiToString', '$EnumDefinition', '$moduleDefinitions', '$getEnumValueType'],
+  _embind_register_enum: function(rawType, name, size, isSigned, rawValueType) {
     name = AsciiToString(name);
-    const enumDef = new EnumDefinition(rawType, name);
+    const valueType = getEnumValueType(rawValueType);
+    const enumDef = new EnumDefinition(rawType, name, valueType);
     registerType(rawType, enumDef);
     moduleDefinitions.push(enumDef);
   },
@@ -741,10 +813,12 @@ var LibraryEmbind = {
     constructorSignature,
     rawConstructor,
     destructorSignature,
-    rawDestructor
+    rawDestructor,
+    valueSize,
+    isTrivial
   ) {
     name = AsciiToString(name);
-    const valueArray = new ValueArrayDefinition(rawType, name);
+    const valueArray = new ValueArrayDefinition(rawType, name, isTrivial);
     tupleRegistrations[rawType] = valueArray;
   },
   _embind_register_value_array_element__deps: ['$tupleRegistrations'],
@@ -783,10 +857,12 @@ var LibraryEmbind = {
     constructorSignature,
     rawConstructor,
     destructorSignature,
-    rawDestructor
+    rawDestructor,
+    valueSize,
+    isTrivial
   ) {
     name = AsciiToString(name);
-    const valueObject = new ValueObjectDefinition(rawType, name);
+    const valueObject = new ValueObjectDefinition(rawType, name, isTrivial);
     structRegistrations[rawType] = valueObject;
   },
   _embind_register_value_object_field__deps: [
@@ -853,6 +929,7 @@ var LibraryEmbind = {
 #endif
   ],
   $emitOutput__postset: () => { addAtPostCtor('emitOutput()'); },
+  $emitOutput__force: true,
   $emitOutput: () => {
     for (const typeId in awaitingDependencies) {
       throwBindingError(`Missing binding for type: '${getTypeName(typeId)}' typeId: ${typeId}`);
@@ -863,19 +940,16 @@ var LibraryEmbind = {
     const printer = new TsPrinter(moduleDefinitions);
 #endif
     const output = printer.print();
-    var fs = require('fs');
+    var fs = require('node:fs');
     fs.writeFileSync(process.argv[2], output + '\n');
   },
 
   // Stub functions used by eval, but not needed for TS generation:
   $makeLegalFunctionName: () => { throw new Error('stub function should not be called'); },
   $runDestructors: () => { throw new Error('stub function should not be called'); },
-  $createNamedFunction: () => { throw new Error('stub function should not be called'); },
   $flushPendingDeletes: () => { throw new Error('stub function should not be called'); },
   $setDelayFunction: () => { throw new Error('stub function should not be called'); },
   $PureVirtualError: () => { throw new Error('stub function should not be called'); },
 };
-
-extraLibraryFuncs.push('$emitOutput');
 
 addToLibrary(LibraryEmbind);

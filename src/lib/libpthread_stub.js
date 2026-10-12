@@ -7,9 +7,6 @@
 #if PTHREADS
 #error "Internal error! PTHREADS should not be enabled when including library_pthread_stub.js."
 #endif
-#if STANDALONE_WASM && SHARED_MEMORY
-#error "STANDALONE_WASM does not support shared memories yet"
-#endif
 
 var LibraryPThreadStub = {
   // ===================================================================================
@@ -18,7 +15,7 @@ var LibraryPThreadStub = {
 
   emscripten_is_main_browser_thread: () =>
 #if MINIMAL_RUNTIME
-    typeof WorkerGlobalScope == 'undefined'
+    typeof WorkerGlobalScope === 'undefined'
 #else
     !ENVIRONMENT_IS_WORKER
 #endif

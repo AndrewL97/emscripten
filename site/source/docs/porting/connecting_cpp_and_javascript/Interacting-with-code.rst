@@ -146,11 +146,6 @@ parameters to pass to the function:
        including function names.
        Exporting functions allows you to continue to access them using the
        original name through the global ``Module`` object.
-     - If you want to export a JS library function (something from a
-       ``src/library*.js`` file, for example), then in addition to
-       ``EXPORTED_FUNCTIONS``, you need to add it to ``DEFAULT_LIBRARY_FUNCS_TO_INCLUDE``,
-       as the latter will force the method to actually be included in
-       the build.
 
    - The compiler will remove code it does not see is used, to improve code
      size. If you use ``ccall`` in a place it sees, like code in a ``--pre-js``
@@ -436,7 +431,7 @@ that you can't use a closure directly, for example, as ``toString``
 isn't compatible with that - just like when using a string to create
 a Web Worker, where you also can't pass a closure. (Note that this
 limitation is just for the values for the keys of the object
-passes to ``addToLibrary`` in the JS library, that is, the toplevel
+passed to ``addToLibrary`` in the JS library, that is, the toplevel
 key-value pairs are special. Interior code inside a function can
 have arbitrary JS, of course).
 
@@ -603,6 +598,9 @@ See the `library_*.js`_ files for other examples.
      by ``_``. In other words ``my_func: function() {},`` becomes
      ``function _my_func() {}``, as all C methods in emscripten have a ``_`` prefix. Keys starting with ``$`` have the ``$``
      stripped and no underscore added.
+   - A library symbol can use ``__force: true`` to be included even when it is
+     not referenced, and ``__export: true`` to be exported when included. Use
+     both decorators to unconditionally include and export a symbol.
 
 
 .. _interacting-with-code-call-function-pointers-from-c:
@@ -667,7 +665,7 @@ a 53 bit (double) and returns an integer error code:
     
 Using ``-sWASM_BIGINT`` when linking is an alternative method of handling
 64-bit types in libraries.  ```Number()``` may be needed on the JavaScript
-side to convert it to a useable value.  See `settings reference <https://emscripten.org/docs/tools_reference/settings_reference.html?highlight=environment#wasm-bigint>`_.
+side to convert it to a usable value.  See `settings reference <https://emscripten.org/docs/tools_reference/settings_reference.html?highlight=environment#wasm-bigint>`_.
 
 
 .. _interacting-with-code-access-memory:

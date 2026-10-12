@@ -22,7 +22,7 @@ var WasiLibrary = {
     throw `exit(${code})`;
 #else
 #if RUNTIME_DEBUG
-    dbg(`proc_exit: ${code}`);
+    dbg(`proc_exit: ${code} (keepRuntimeAlive=${keepRuntimeAlive()})`);
 #endif
     EXITSTATUS = code;
     if (!keepRuntimeAlive()) {
@@ -49,13 +49,7 @@ var WasiLibrary = {
   $getEnvStrings: () => {
     if (!getEnvStrings.strings) {
       // Default values.
-#if DETERMINISTIC
-      // Deterministic language detection, ignore the browser's language.
-      var lang = 'C.UTF-8';
-#else
-      // Browser language detection #8751
-      var lang = ((typeof navigator == 'object' && navigator.language) || 'C').replace('-', '_') + '.UTF-8';
-#endif
+      var lang = (globalThis.navigator?.language ?? 'C').replace('-', '_') + '.UTF-8';
       var env = {
 #if !PURE_WASI
         'USER': 'web_user',
@@ -67,6 +61,12 @@ var WasiLibrary = {
         '_': getExecutableName()
 #endif
       };
+#if ENVIRONMENT_MAY_BE_NODE && NODE_HOST_ENV
+      if (ENVIRONMENT_IS_NODE) {
+        // When NODE_HOST_ENV is enabled we mirror the entire host environment.
+        env = process.env;
+      }
+#endif
       // Apply the user-provided values, if any.
       for (var x in ENV) {
         // x is a key in ENV; if ENV[x] is undefined, that means it was
@@ -119,7 +119,9 @@ var WasiLibrary = {
 #if MAIN_READS_PARAMS
     {{{ makeSetValue('pargc', 0, 'mainArgs.length', SIZE_TYPE) }}};
     var bufSize = 0;
-    mainArgs.forEach((arg) => bufSize += arg.length + 1);
+    for (var arg of mainArgs) {
+      bufSize += arg.length + 1;
+    }
     {{{ makeSetValue('pargv_buf_size', 0, 'bufSize', SIZE_TYPE) }}};
 #else
     {{{ makeSetValue('pargc', 0, '0', SIZE_TYPE) }}};
@@ -132,12 +134,12 @@ var WasiLibrary = {
   args_get: (argv, argv_buf) => {
 #if MAIN_READS_PARAMS
     var bufSize = 0;
-    mainArgs.forEach((arg, i) => {
+    for (let [i, arg] of mainArgs.entries()) {
       var ptr = argv_buf + bufSize;
       {{{ makeSetValue('argv', `i*${POINTER_SIZE}`, 'ptr', '*') }}};
       stringToAscii(arg, ptr);
       bufSize += arg.length + 1;
-    });
+    }
 #endif
     return 0;
   },
@@ -167,7 +169,7 @@ var WasiLibrary = {
       return {{{ cDefs.ENOSYS }}};
     }
     // "now" is in ms, and wasi times are in ns.
-    var nsec = Math.round(now * 1000 * 1000);
+    var nsec = Math.round(now * 1_000_000);
     {{{ makeSetValue('ptime', 0, 'nsec', 'i64') }}};
     return 0;
   },
@@ -182,7 +184,7 @@ var WasiLibrary = {
     var nsec;
     // all wasi clocks but realtime are monotonic
     if (clk_id === {{{ cDefs.CLOCK_REALTIME }}}) {
-      nsec = 1000 * 1000; // educated guess that it's milliseconds
+      nsec = 1_000_000; // educated guess that it's milliseconds
     } else if (nowIsMonotonic) {
       nsec = _emscripten_get_now_res();
     } else {
@@ -200,11 +202,22 @@ var WasiLibrary = {
       var ptr = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_base, '*') }}};
       var len = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_len, '*') }}};
       iov += {{{ C_STRUCTS.iovec.__size__ }}};
-      var curr = FS.read(stream, HEAP8, ptr, len, offset);
+      try {
+        var curr = FS.read(stream, HEAP8, ptr, len, offset);
+      } catch (e) {
+        // On a non-blocking stream a subsequent read may would-block after we
+        // already gathered data. POSIX readv is a single gather-read: return
+        // what we have rather than failing the whole call.
+        if (ret > 0 && e instanceof FS.ErrnoError &&
+            (e.errno == {{{ cDefs.EAGAIN }}} || e.errno == {{{ cDefs.EWOULDBLOCK }}})) {
+          break;
+        }
+        throw e;
+      }
       if (curr < 0) return -1;
       ret += curr;
       if (curr < len) break; // nothing more to read
-      if (typeof offset != 'undefined') {
+      if (typeof offset !== 'undefined') {
         offset += curr;
       }
     }
@@ -212,23 +225,27 @@ var WasiLibrary = {
   },
   $doWritev__docs: '/** @param {number=} offset */',
   $doWritev: (stream, iov, iovcnt, offset) => {
-    var ret = 0;
-    for (var i = 0; i < iovcnt; i++) {
+    // Gather all iovecs into one contiguous buffer and issue a single
+    // FS.write, matching POSIX writev's single gather-write semantics (as
+    // __syscall_sendmsg already does). Per-iovec writes fragment a stream
+    // socket send into multiple segments, breaking stream byte semantics.
+    if (iovcnt == 1) {
+      // Single iovec: write directly from HEAP8, no gather buffer needed.
+      return FS.write(stream, HEAP8, {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_base, '*') }}}, {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_len, '*') }}}, offset);
+    }
+    var total = 0;
+    for (var i = 0, p = iov; i < iovcnt; i++, p += {{{ C_STRUCTS.iovec.__size__ }}}) {
+      total += {{{ makeGetValue('p', C_STRUCTS.iovec.iov_len, '*') }}};
+    }
+    var view = new Uint8Array(total);
+    var voff = 0;
+    for (var i = 0; i < iovcnt; i++, iov += {{{ C_STRUCTS.iovec.__size__ }}}) {
       var ptr = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_base, '*') }}};
       var len = {{{ makeGetValue('iov', C_STRUCTS.iovec.iov_len, '*') }}};
-      iov += {{{ C_STRUCTS.iovec.__size__ }}};
-      var curr = FS.write(stream, HEAP8, ptr, len, offset);
-      if (curr < 0) return -1;
-      ret += curr;
-      if (curr < len) {
-        // No more space to write.
-        break;
-      }
-      if (typeof offset != 'undefined') {
-        offset += curr;
-      }
+      view.set(HEAPU8.subarray(ptr, ptr + len), voff);
+      voff += len;
     }
-    return ret;
+    return FS.write(stream, view, 0, total, offset);
   },
 #else
   // MEMFS filesystem disabled lite handling of stdout and stderr:
@@ -241,7 +258,7 @@ var WasiLibrary = {
 #if ASSERTIONS
     assert(buffer);
 #endif
-    if (curr === 0 || curr === {{{ charCode('\n') }}}) {
+    if (!curr || curr === {{{ charCode('\n') }}}) {
       (stream === 1 ? out : err)(UTF8ArrayToString(buffer));
       buffer.length = 0;
     } else {
@@ -259,8 +276,8 @@ var WasiLibrary = {
 #if hasExportedSymbol('fflush')
     _fflush(0);
 #endif
-    if (printCharBuffers[1].length) printChar(1, {{{ charCode("\n") }}});
-    if (printCharBuffers[2].length) printChar(2, {{{ charCode("\n") }}});
+    if (printCharBuffers[1].length) printChar(1, {{{ charCode('\n') }}});
+    if (printCharBuffers[2].length) printChar(2, {{{ charCode('\n') }}});
   },
   fd_write__deps: ['$flush_NO_FILESYSTEM', '$printChar'],
   fd_write__postset: () => addAtExit('flush_NO_FILESYSTEM()'),
@@ -294,7 +311,7 @@ var WasiLibrary = {
   fd_pwrite__i53abi: true,
   fd_pwrite: (fd, iov, iovcnt, offset, pnum) => {
 #if SYSCALLS_REQUIRE_FILESYSTEM
-    if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
+    if (isNaN(offset)) return {{{ cDefs.EFBIG }}};
     var stream = SYSCALLS.getStreamFromFD(fd)
     var num = doWritev(stream, iov, iovcnt, offset);
     {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
@@ -347,7 +364,7 @@ var WasiLibrary = {
   fd_pread__i53abi: true,
   fd_pread: (fd, iov, iovcnt, offset, pnum) => {
 #if SYSCALLS_REQUIRE_FILESYSTEM
-    if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
+    if (isNaN(offset)) return {{{ cDefs.EFBIG }}};
     var stream = SYSCALLS.getStreamFromFD(fd)
     var num = doReadv(stream, iov, iovcnt, offset);
     {{{ makeSetValue('pnum', 0, 'num', SIZE_TYPE) }}};
@@ -362,11 +379,11 @@ var WasiLibrary = {
   fd_seek__i53abi: true,
   fd_seek: (fd, offset, whence, newOffset) => {
 #if SYSCALLS_REQUIRE_FILESYSTEM
-    if (isNaN(offset)) return {{{ cDefs.EOVERFLOW }}};
+    if (isNaN(offset)) return {{{ cDefs.EFBIG }}};
     var stream = SYSCALLS.getStreamFromFD(fd);
     FS.llseek(stream, offset, whence);
     {{{ makeSetValue('newOffset', '0', 'stream.position', 'i64') }}};
-    if (stream.getdents && offset === 0 && whence === {{{ cDefs.SEEK_SET }}}) stream.getdents = null; // reset readdir state
+    if (stream.getdents && !offset && whence === {{{ cDefs.SEEK_SET }}}) stream.getdents = null; // reset readdir state
     return 0;
 #else
     return {{{ cDefs.ESPIPE }}};
@@ -410,12 +427,12 @@ var WasiLibrary = {
   // preopen maps open file descriptors to pathname.
   // In emscripten we already have a VFS layer so (for now) we expose the entire
   // VFS to the wasi API.
-  $preopens: "{3: '/'}",
+  $preopens: {3: '/'},
 
   path_open__sig: 'iiiiiiiiii',
   path_open__deps: ['$wasiRightsToMuslOFlags', '$wasiOFlagsToMuslOFlags', '$preopens'],
   path_open: (fd, dirflags, path, path_len, oflags,
-              fs_rights_base, fs_rights_inherting,
+              fs_rights_base, fs_rights_inheriting,
               fdflags, opened_fd) => {
     if (!(fd in preopens)) {
       return {{{ cDefs.EBADF }}};
@@ -532,34 +549,32 @@ var WasiLibrary = {
     return 0;
   },
 
-  fd_sync: (fd) => {
 #if SYSCALLS_REQUIRE_FILESYSTEM
+  fd_sync__async: 'auto',
+  fd_sync: (fd) => {
     var stream = SYSCALLS.getStreamFromFD(fd);
-#if ASYNCIFY
-    return Asyncify.handleSleep((wakeUp) => {
+    var rtn = stream.stream_ops?.fsync?.(stream);
+#if ASYNCIFY || PTHREADS
+    return new Promise((resolve) => {
       var mount = stream.node.mount;
-      if (!mount.type.syncfs) {
-        // We write directly to the file system, so there's nothing to do here.
-        wakeUp(0);
-        return;
+      if (mount?.type.syncfs) {
+        mount.type.syncfs(mount, false, (err) => resolve(err ? {{{ cDefs.EIO }}} : 0));
+      } else {
+        resolve(rtn);
       }
-      mount.type.syncfs(mount, false, (err) => {
-        wakeUp(err ? {{{ cDefs.EIO }}} : 0);
-      });
     });
 #else
-    if (stream.stream_ops?.fsync) {
-      return stream.stream_ops.fsync(stream);
-    }
-    return 0; // we can't do anything synchronously; the in-memory FS is already synced to
-#endif // ASYNCIFY
-#elif ASSERTIONS
-    abort('fd_sync called without SYSCALLS_REQUIRE_FILESYSTEM');
-#else
-    return {{{ cDefs.ENOSYS }}};
-#endif // SYSCALLS_REQUIRE_FILESYSTEM
+    return rtn;
+#endif // ASYNCIFY || PTHREADS
   },
-  fd_sync__async: true,
+#else // SYSCALLS_REQUIRE_FILESYSTEM
+  fd_sync: (fd) => {
+#if ASSERTIONS
+    abort('fd_sync called without SYSCALLS_REQUIRE_FILESYSTEM');
+#endif
+    return {{{ cDefs.ENOSYS }}};
+  },
+#endif // SYSCALLS_REQUIRE_FILESYSTEM
 
   // random.h
 
@@ -570,8 +585,8 @@ var WasiLibrary = {
 #if ENVIRONMENT_MAY_BE_NODE && MIN_NODE_VERSION < 190000
     // This block is not needed on v19+ since crypto.getRandomValues is builtin
     if (ENVIRONMENT_IS_NODE) {
-      var nodeCrypto = require('crypto');
-      return (view) => nodeCrypto.randomFillSync(view);
+      var nodeCrypto = require('node:crypto');
+      return (view) => (nodeCrypto.randomFillSync(view), 0);
     }
 #endif // ENVIRONMENT_MAY_BE_NODE
 
@@ -583,35 +598,39 @@ var WasiLibrary = {
         }
         const b64 = os.system('sh', ['-c', `head -c${view.byteLength} /dev/urandom | base64 --wrap=0`]);
         view.set(base64Decode(b64));
+        return 0;
       };
+    }
+#endif
+
+#if ENVIRONMENT_MAY_BE_AUDIO_WORKLET
+    // Audio worklets don't support crypto.getRandomValues
+    if (ENVIRONMENT_IS_AUDIO_WORKLET) { //!globalThis.crypto) {
+      return () => {{{ cDefs.ENOTSUP }}};
     }
 #endif
 
 #if SHARED_MEMORY
     // like with most Web APIs, we can't use Web Crypto API directly on shared memory,
     // so we need to create an intermediate buffer and copy it to the destination
-    return (view) => view.set(crypto.getRandomValues(new Uint8Array(view.byteLength)));
+    return (view) => (view.set(crypto.getRandomValues(new Uint8Array(view.byteLength))), 0);
 #else
-    return (view) => crypto.getRandomValues(view);
+    return (view) => (crypto.getRandomValues(view), 0);
 #endif
   },
 
   $randomFill__deps: ['$initRandomFill'],
-  $randomFill: (view) => {
-    // Lazily init on the first invocation.
-    (randomFill = initRandomFill())(view);
-  },
+  // Lazily init on the first invocation.
+  $randomFill: (view) => (randomFill = initRandomFill())(view),
 
   random_get__proxy: 'none',
+  random_get__nothrow: true,
   random_get__deps: ['$randomFill'],
-  random_get: (buffer, size) => {
-    randomFill(HEAPU8.subarray(buffer, buffer + size));
-    return 0;
-  },
+  random_get: (buffer, size) => randomFill(HEAPU8.subarray(buffer, buffer + size)),
 };
 
-for (var x in WasiLibrary) {
-  wrapSyscallFunction(x, WasiLibrary, true);
+for (const name of Object.keys(WasiLibrary)) {
+  wrapSyscallFunction(name, WasiLibrary, true);
 }
 
 addToLibrary(WasiLibrary);

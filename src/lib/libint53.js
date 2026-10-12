@@ -14,7 +14,7 @@ addToLibrary({
 #endif
   // Writes the given JavaScript Number to the WebAssembly heap as a 64-bit integer variable.
   // If the given number is not in the range [-2^53, 2^53] (inclusive), then an unexpectedly
-  // rounded or incorrect number can be written to the heap. ("garbage in, garbage out")
+  // rounded or incorrect number can be written to the heap. ('garbage in, garbage out')
   // Note that unlike the most other function variants in this library, there is no separate
   // function $writeI53ToU64(): the implementation would be identical, and it is up to the
   // C/C++ side code to interpret the resulting number as signed or unsigned as is desirable.
@@ -132,7 +132,7 @@ addToLibrary({
 #if WASM_BIGINT
   $INT53_MAX: '{{{ Math.pow(2, 53) }}}',
   $INT53_MIN: '-{{{ Math.pow(2, 53) }}}',
-  // Counvert a bigint value (usually coming from Wasm->JS call) into an int53
+  // Convert a bigint value (usually coming from Wasm->JS call) into an int53
   // JS Number.  This is used when we have an incoming i64 that we know is a
   // pointer or size_t and is expected to be within the int53 range.
   // Returns NaN if the incoming bigint is outside the range.

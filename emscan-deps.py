@@ -4,21 +4,23 @@
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
 # found in the LICENSE file.
 
-"""emscan-deps - clang-scan-deps helper script
+"""emscan-deps - clang-scan-deps helper script.
 
 This script acts as a frontend replacement for clang-scan-deps.
 """
 
 import sys
-import emcc
-from tools import shared, cmdline
+
+from tools import cmdline, compile, shared
 
 argv = sys.argv[1:]
 
 # Parse and discard any emcc-specific flags (e.g. -sXXX).
-newargs = cmdline.parse_arguments(argv)[1]
+newargs = cmdline.parse_arguments(argv)
 
 # Add any clang flags that emcc would add.
-newargs += emcc.get_cflags(tuple(argv))
+newargs += compile.get_cflags(tuple(argv))
 
-shared.exec_process([shared.CLANG_SCAN_DEPS] + newargs)
+CLANG_SCAN_DEPS = shared.llvm_tool_path('clang-scan-deps')
+
+shared.exec_process([CLANG_SCAN_DEPS, *newargs])

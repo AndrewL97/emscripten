@@ -123,7 +123,7 @@ static void ProcessThreadsCallback(ThreadContextBase *tctx, void *arg) {
     return;
 
   Frontier *frontier = reinterpret_cast<Frontier *>(arg);
-  tid_t os_id = tctx->os_id;
+  ThreadID os_id = tctx->os_id;
 
   uptr stack_begin, stack_end, tls_begin, tls_end, cache_begin, cache_end;
   DTLS *dtls;
@@ -139,7 +139,7 @@ static void ProcessThreadsCallback(ThreadContextBase *tctx, void *arg) {
     LOG_THREADS("Stack at %p-%p.\n", (void*)stack_begin, (void*)stack_end);
 
     // We can't get the SP for other threads to narrow down the range, but we
-    // we can for the current thread.
+    // can for the current thread.
     if (tctx->os_id == GetTid()) {
       uptr sp = (uptr) __builtin_frame_address(0);
       if (sp < stack_begin || sp >= stack_end) {
@@ -175,7 +175,7 @@ static void ProcessThreadsCallback(ThreadContextBase *tctx, void *arg) {
 
 void ProcessThreads(SuspendedThreadsList const& suspended_threads,
                     Frontier* frontier,
-                    tid_t caller_tid,
+                    ThreadID caller_tid,
                     uptr caller_sp) {
   GetThreadRegistryLocked()->RunCallbackForEachThreadLocked(
     ProcessThreadsCallback, frontier);

@@ -6,14 +6,17 @@
 import os
 import shutil
 
-TAG = '1.6.39'
-HASH = '19851afffbe2ffde62d918f7e9017dec778a7ce9c60c75cdc65072f086e6cdc9d9895eb7b207535a84cb5f4ead77ebc2aa9d80025f153662903023e1f7ab9bae'
+TAG = '1.6.58'
+# Emscripten maintainers, could you please upload this to your cache? Thanks.
+HASH = '177d81fd1ba1a46ff64da7f24260814876bd0a27ee5bed6dc9dbdd1fe28f3a67cb6f11c74a68f8380a9a7ab0d95c0022b847b1a3e4d939f2a562274627205789'
 
 deps = ['zlib']
 variants = {
   'libpng-mt': {'PTHREADS': 1},
-  'libpng-legacysjlj': {'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': 1},
-  'libpng-mt-legacysjlj': {'PTHREADS': 1, 'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': 1},
+  'libpng-wasmsjlj': {'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': False},
+  'libpng-mt-wasmsjlj': {'PTHREADS': 1, 'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': False},
+  'libpng-legacysjlj': {'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': True},
+  'libpng-mt-legacysjlj': {'PTHREADS': 1, 'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': True},
 }
 
 
@@ -26,7 +29,10 @@ def get_lib_name(settings):
   if settings.PTHREADS:
     suffix += '-mt'
   if settings.SUPPORT_LONGJMP == 'wasm':
-    suffix += '-legacysjlj'
+    if settings.WASM_LEGACY_EXCEPTIONS:
+      suffix += '-legacysjlj'
+    else:
+      suffix += '-wasmsjlj'
   return f'libpng{suffix}.a'
 
 
@@ -45,6 +51,7 @@ def get(ports, settings, shared):
       flags += ['-pthread']
     if settings.SUPPORT_LONGJMP == 'wasm':
       flags.append('-sSUPPORT_LONGJMP=wasm')
+      flags.append(f'-sWASM_LEGACY_EXCEPTIONS={int(settings.WASM_LEGACY_EXCEPTIONS)}')
 
     ports.build_port(source_path, final, 'libpng', flags=flags, exclude_files=['pngtest'], exclude_dirs=['scripts', 'contrib'])
 

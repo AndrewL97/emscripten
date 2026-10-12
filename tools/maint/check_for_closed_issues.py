@@ -2,14 +2,14 @@
 
 """Find references to closed github issues in the source code.
 
-Depends on the `gh` command line tool being installed."""
+Depends on the `gh` command line tool being installed.
+"""
 
 import json
 import os
-import subprocess
 import re
+import subprocess
 import sys
-
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(os.path.dirname(script_dir))
@@ -23,7 +23,7 @@ def run(*args, **kwargs):
 def is_closed(issue_number):
   output = run(['gh', 'issue', 'view', '--json', 'state', issue_number])
   state = json.loads(output)['state']
-  assert state in ['OPEN', 'CLOSED']
+  assert state in {'OPEN', 'CLOSED'}
   return state == 'CLOSED'
 
 
@@ -37,7 +37,7 @@ def main():
       continue
     issue = match[2]
     if is_closed(issue):
-      print('Reference to closed github issue (#%s):' % issue)
+      print(f'Reference to closed github issue (#{issue}):')
       print(line)
 
 

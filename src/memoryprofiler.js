@@ -15,12 +15,12 @@ var emscriptenMemoryProfiler = {
 
   // Allocations of memory blocks larger than this threshold will get their
   // detailed callstack captured and logged at runtime.
-  trackedCallstackMinSizeBytes: (typeof new Error().stack == 'undefined') ? Infinity : 16*1024*1024,
+  trackedCallstackMinSizeBytes: (typeof new Error().stack === 'undefined') ? Infinity : 16*1024*1024,
 
   // Allocations from call sites having more than this many outstanding
   // allocated pointers will get their detailed callstack captured and logged at
   // runtime.
-  trackedCallstackMinAllocCount: (typeof new Error().stack == 'undefined') ? Infinity : 10000,
+  trackedCallstackMinAllocCount: (typeof new Error().stack === 'undefined') ? Infinity : 10_000,
 
   // If true, we hook into stackAlloc to be able to catch better estimate of the
   // maximum used STACK space.  You might only ever want to set this to false
@@ -118,7 +118,7 @@ var emscriptenMemoryProfiler = {
     return '#' + toHex(r) + toHex(g) + toHex(b);
   },
 
-  onSbrkGrow(oldLimit, newLimit) {
+  onSbrkGrow(oldLimit, newLimit, loc) {
     var self = emscriptenMemoryProfiler;
     // On first sbrk(), account for the initial size.
     if (self.sbrkSources.length == 0) {
@@ -130,8 +130,11 @@ var emscriptenMemoryProfiler = {
       });
     }
     if (newLimit <= oldLimit) return;
+#if ASSERTIONS
+    assert(loc)
+#endif
     self.sbrkSources.push({
-      stack: self.filterCallstackForHeapResize(new Error().stack.toString()),
+      stack: self.filterCallstackForHeapResize(loc),
       begin: oldLimit,
       end: newLimit,
       color: self.hsvToRgb(self.sbrkSources.length * 0.618033988749895 % 1, 0.5, 0.95)
@@ -156,25 +159,25 @@ var emscriptenMemoryProfiler = {
       end: newSize,
       color: self.resizeMemorySources.length % 2 ? '#ff00ff' : '#ff80ff'
     });
-    console.log('memory resize: ' + oldSize + ' ' + newSize);
+    console.log(`memory resize: ${oldSize} ${newSize}`);
   },
 
   recordStackWatermark() {
-    if (typeof runtimeInitialized == 'undefined' || runtimeInitialized) {
+    if (typeof runtimeInitialized === 'undefined' || runtimeInitialized) {
       var self = emscriptenMemoryProfiler;
       self.stackTopWatermark = Math.min(self.stackTopWatermark, _emscripten_stack_get_current());
     }
   },
 
-  onMalloc(ptr, size) {
+  onMalloc(ptr, size, loc) {
     if (!ptr) return;
     if (emscriptenMemoryProfiler.sizeOfAllocatedPtr[ptr])
     {
 // Uncomment to debug internal workings of tracing:
-//      console.error('Allocation error in onMalloc! Pointer ' + ptr + ' had already been tracked as allocated!');
-//      console.error('Previous site of allocation: ' + emscriptenMemoryProfiler.allocationSitePtrs[ptr]);
-//      console.error('This doubly attempted site of allocation: ' + new Error().stack.toString());
-//      throw 'malloc internal inconsistency!';
+//      console.error(`Allocation error in onMalloc! Pointer ${ptr} had already been tracked as allocated!`);
+//      console.error(`Previous site of allocation: ${emscriptenMemoryProfiler.allocationSitePtrs[ptr]}`);
+//      console.error(`This doubly attempted site of allocation: ${new Error().stack.toString()}`);
+//      abort('malloc internal inconsistency!');
       return;
     }
     var self = emscriptenMemoryProfiler;
@@ -189,7 +192,9 @@ var emscriptenMemoryProfiler = {
     // Also track if this was a _malloc performed at preRun time.
     if (!self.pagePreRunIsFinished) self.sizeOfPreRunAllocatedPtr[ptr] = size;
 
-    var loc = new Error().stack.toString();
+#if ASSERTIONS
+    assert(loc)
+#endif
     self.allocationsAtLoc[loc] ||= [0, 0, self.filterCallstackForMalloc(loc)];
     self.allocationsAtLoc[loc][0] += 1;
     self.allocationsAtLoc[loc][1] += size;
@@ -208,7 +213,7 @@ var emscriptenMemoryProfiler = {
     {
 // Uncomment to debug internal workings of tracing:
 //      console.error('Detected double free of pointer ' + ptr + ' at location:\n'+ new Error().stack.toString());
-//      throw 'double free!';
+//      abort('double free!');
       return;
     }
 
@@ -229,9 +234,9 @@ var emscriptenMemoryProfiler = {
     ++self.totalTimesFreeCalled;
   },
 
-  onRealloc(oldAddress, newAddress, size) {
+  onRealloc(oldAddress, newAddress, size, loc) {
     emscriptenMemoryProfiler.onFree(oldAddress);
-    emscriptenMemoryProfiler.onMalloc(newAddress, size);
+    emscriptenMemoryProfiler.onMalloc(newAddress, size, loc);
   },
 
   onPreloadComplete() {
@@ -241,16 +246,17 @@ var emscriptenMemoryProfiler = {
   // Installs startup hook and periodic UI update timer.
   initialize() {
     // Inject the memoryprofiler hooks.
-    Module['onMalloc'] = (ptr, size) => emscriptenMemoryProfiler.onMalloc(ptr, size);
-    Module['onRealloc'] = (oldAddress, newAddress, size) => emscriptenMemoryProfiler.onRealloc(oldAddress, newAddress, size);;
+    Module['onMalloc'] = (ptr, size, loc) => emscriptenMemoryProfiler.onMalloc(ptr, size, loc);
+    Module['onRealloc'] = (oldAddress, newAddress, size, loc) => emscriptenMemoryProfiler.onRealloc(oldAddress, newAddress, size, loc);;
     Module['onFree'] = (ptr) => emscriptenMemoryProfiler.onFree(ptr);
+    Module['onSbrkGrow'] = (old_brk, new_brk, loc) => emscriptenMemoryProfiler.onSbrkGrow(old_brk, new_brk, loc);
     emscriptenMemoryProfiler.recordStackWatermark();
 
     // Add a tracking mechanism to detect when VFS loading is complete.
-    Module['preRun'] ||= [];
+    Module['preRun'] ??= [];
     Module['preRun'].push(emscriptenMemoryProfiler.onPreloadComplete);
 
-    if (emscriptenMemoryProfiler.hookStackAlloc && typeof stackAlloc == 'function') {
+    if (emscriptenMemoryProfiler.hookStackAlloc && typeof stackAlloc === 'function') {
       // Inject stack allocator.
       var prevStackAlloc = stackAlloc;
       var hookedStackAlloc = (size) => {
@@ -272,6 +278,7 @@ var emscriptenMemoryProfiler = {
     var div;
     if (!emscriptenMemoryProfiler.memoryprofiler_summary) {
       div = document.createElement("div");
+      div.className = 'emscripten-memory-profiler-container';
       div.innerHTML = "<div style='border: 2px solid black; padding: 2px;'><canvas style='border: 1px solid black; margin-left: auto; margin-right: auto; display: block;' id='memoryprofiler_canvas' width='100%' height='50'></canvas><input type='checkbox' id='showHeapResizes' onclick='emscriptenMemoryProfiler.updateUi()'>Display heap and sbrk() resizes. Filter sbrk() and heap resize callstacks by keywords: <input type='text' id='sbrkFilter'>(reopen page with ?sbrkFilter=foo,bar query params to prepopulate this list)<br/>Track all allocation sites larger than <input id='memoryprofiler_min_tracked_alloc_size' type=number value="+emscriptenMemoryProfiler.trackedCallstackMinSizeBytes+"></input> bytes, and all allocation sites with more than <input id='memoryprofiler_min_tracked_alloc_count' type=number value="+emscriptenMemoryProfiler.trackedCallstackMinAllocCount+"></input> outstanding allocations. (visit this page via URL query params foo.html?trackbytes=1000&trackcount=100 to apply custom thresholds starting from page load)<br/><div id='memoryprofiler_summary'></div><input id='memoryprofiler_clear_alloc_stats' type='button' value='Clear alloc stats' ></input><br />Sort allocations by:<select id='memoryProfilerSort'><option value='bytes'>Bytes</option><option value='count'>Count</option><option value='fixed'>Fixed</option></select><div id='memoryprofiler_ptrs'></div>";
     }
     var populateHtmlBody = function() {
@@ -367,7 +374,7 @@ var emscriptenMemoryProfiler = {
   },
 
   countOpenALAudioDataSize() {
-    if (typeof AL == 'undefined' || !AL.currentContext) return 0;
+    if (typeof AL === 'undefined' || !AL.currentContext) return 0;
 
     var totalMemory = 0;
 
@@ -485,7 +492,7 @@ var emscriptenMemoryProfiler = {
       self.canvas.width = document.documentElement.clientWidth - 32;
     }
 
-    if (typeof runtimeInitialized != 'undefined' && !runtimeInitialized) {
+    if (typeof runtimeInitialized !== 'undefined' && !runtimeInitialized) {
       return;
     }
     var stackBase = _emscripten_stack_get_base();
@@ -502,7 +509,7 @@ var emscriptenMemoryProfiler = {
     html += '. STACK_MAX: ' + toHex(stackMax, width) + '.';
     html += '<br />STACK memory area used now (should be zero): ' + self.formatBytes(stackBase - stackCurrent) + '.' + colorBar('#FFFF00') + ' STACK watermark highest seen usage (approximate lower-bound!): ' + self.formatBytes(stackBase - self.stackTopWatermark);
 
-    var heap_base = Module['___heap_base'];
+    var heap_base = ___heap_base;
     var heap_end = _sbrk({{{ to64('0') }}});
     html += "<br />DYNAMIC memory area size: " + self.formatBytes(heap_end - heap_base);
     html += ". start: " + toHex(heap_base, width);
@@ -622,13 +629,7 @@ var emscriptenMemoryProfiler = {
   }
 };
 
-// Backwards compatibility with previously compiled code. Don't call this
-// anymore!
-function memoryprofiler_add_hooks() {
-  emscriptenMemoryProfiler.initialize();
-}
-
-if (typeof document != 'undefined' && typeof window != 'undefined' && typeof process == 'undefined') {
+if (globalThis.document && globalThis.window && !globalThis.process) {
   emscriptenMemoryProfiler.initialize();
 }
 

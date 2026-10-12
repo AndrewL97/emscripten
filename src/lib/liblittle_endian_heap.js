@@ -94,6 +94,7 @@ function LE_HEAP_UPDATE() {
     const res = order(Atomics.load(heap, offset));
     return heap.unsigned ? heap.unsigned(res) : res;
   },
+  $LE_ATOMICS_NOTIFY__docs: '/**@param {number=} count*/',
   $LE_ATOMICS_NOTIFY: (heap, offset, count) => Atomics.notify(heap, offset, count),
   $LE_ATOMICS_OR: (heap, offset, value) => {
     const order = LE_ATOMICS_NATIVE_BYTE_ORDER[heap.BYTES_PER_ELEMENT - 1];
@@ -109,11 +110,11 @@ function LE_HEAP_UPDATE() {
     const res = order(Atomics.sub(heap, offset, order(value)));
     return heap.unsigned ? heap.unsigned(res) : res;
   },
-  $LE_ATOMICS_WAIT: (heap, offset, value, timeout) => {
+  $LE_ATOMICS_WAIT: (heap, offset, value, timeout = Infinity) => {
     const order = LE_ATOMICS_NATIVE_BYTE_ORDER[heap.BYTES_PER_ELEMENT - 1];
     return Atomics.wait(heap, offset, order(value), timeout);
   },
-  $LE_ATOMICS_WAITASYNC: (heap, offset, value, timeout) => {
+  $LE_ATOMICS_WAITASYNC: (heap, offset, value, timeout = Infinity) => {
     const order = LE_ATOMICS_NATIVE_BYTE_ORDER[heap.BYTES_PER_ELEMENT - 1];
     return Atomics.waitAsync(heap, offset, order(value), timeout);
   },

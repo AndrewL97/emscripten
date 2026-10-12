@@ -5,7 +5,7 @@
  * found in the LICENSE file.
  */
 
-// Built from glbook/hello triange and sdl_ogl, see details there
+// Built from glbook/hello triangle and sdl_ogl, see details there
 
 #include "SDL/SDL.h"
 #include "SDL/SDL_image.h"
@@ -100,8 +100,8 @@ int Init ()
    return GL_TRUE;
 }
 
-static const int kNegativeTest = 0;
-static const int kPositiveTest = 1;
+const int kNegativeTest = 0;
+const int kPositiveTest = 1;
 
 ///
 // Draw a triangle using the shader pair created in Init()

@@ -27,6 +27,14 @@ Audio Worklets API is based on the Wasm Workers feature. It is possible to
 also enable the `-pthread` option while targeting Audio Worklets, but the
 audio worklets will always run in a Wasm Worker, and not in a Pthread.
 
+.. note::
+   If you want to load an emscripten-generated program into an AudioContext that
+   you have created yourself, without depending on shared memory or
+   :ref:`WASM_WORKERS` you can add ``worklet`` to :ref:`ENVIRONMENT`.  In this
+   mode, because Audio Worklets do not have any kind of fetch API, you will need
+   either use `-sSINGLE_FILE` (to embed the Wasm file), or use a custom
+   `instantiateWasm` to supply the Wasm module yourself (e.g. via `postMessage`).
+
 Development Overview
 ====================
 
@@ -44,10 +52,11 @@ and then, these processors are instantiated one or more times in the audio
 processing graph as AudioWorkletNodes.
 
 Once a class type is instantiated on the Web Audio graph and the graph is
-running, a C/C++ function pointer callback will be invoked for each 128
-samples of the processed audio stream that flows through the node. Newer Web
-Audio API specs allow this to be changed, so for future compatibility use the
-``AudioSampleFrame``'s ``samplesPerChannel`` to get the value.
+running, a C/C++ function pointer callback will be invoked for each N samples
+of the processed audio stream that flows through the node (where N is is the
+number of samples per channel, exposed as ``AudioSampleFrame``'s
+``samplesPerChannel``, always 128 in the 1.0 Web Audio API, though with the 1.1
+API ``emscripten_create_audio_context()`` accepts a ``renderSizeHint`` option).
 
 This callback will be executed on a dedicated separate audio processing
 thread with real-time processing priority. Each Web Audio context will
@@ -124,8 +133,8 @@ which resumes the audio context when the user clicks on the DOM Canvas element t
     };
 
     // Create node
-    EMSCRIPTEN_AUDIO_WORKLET_NODE_T wasmAudioWorklet = emscripten_create_wasm_audio_worklet_node(audioContext,
-                                                              "noise-generator", &options, &GenerateNoise, 0);
+    EMSCRIPTEN_WEBAUDIO_T wasmAudioWorklet = emscripten_create_wasm_audio_worklet_node(audioContext,
+                                                    "noise-generator", &options, &GenerateNoise, 0);
 
     // Connect it to audio context destination
     emscripten_audio_node_connect(wasmAudioWorklet, audioContext, 0, 0);
@@ -170,17 +179,34 @@ And that's it! Compile the code with the linker flags ``-sAUDIO_WORKLET -sWASM_W
 Synchronizing audio thread with the main thread
 ===============================================
 
-Wasm Audio Worklets API builds on top of the Emscripten Wasm Workers feature. This means that the Wasm Audio Worklet thread is modeled as if it was a Wasm Worker thread.
+Wasm Audio Worklets API builds on top of the Emscripten Wasm Workers feature.
+This means that the Wasm Audio Worklet thread is modeled as if it was a Wasm
+Worker thread.
 
-To synchronize information between an Audio Worklet Node and other threads in the application, there are three options:
+To synchronize information between an Audio Worklet Node and other threads in
+the application, there are three options:
 
-1. Leverage the Web Audio "AudioParams" model. Each Audio Worklet Processor type is instantiated with a custom defined set of audio parameters that can affect the audio computation at sample precise accuracy. These parameters are passed in the ``params`` array into the audio processing function.
+1. Leverage the Web Audio "AudioParams" model. Each Audio Worklet Processor type
+   is instantiated with a custom defined set of audio parameters that can affect
+   the audio computation at sample precise accuracy. These parameters are passed
+   in the ``params`` array into the audio processing function.
 
-   The main browser thread that created the Web Audio context can adjust the values of these parameters whenever desired. See `MDN function: setValueAtTime <https://developer.mozilla.org/en-US/docs/Web/API/AudioParam/setValueAtTime>`_.
+   The main browser thread that created the Web Audio context can adjust the
+   values of these parameters whenever desired. See `MDN function:
+   setValueAtTime
+   <https://developer.mozilla.org/en-US/docs/Web/API/AudioParam/setValueAtTime>`_.
 
-2. Data can be shared with the Audio Worklet thread using GCC/Clang lock-free atomics operations, Emscripten atomics operations and the Wasm Worker API thread synchronization primitives. See :ref:`wasm_workers` for more information.
+2. Data can be shared with the Audio Worklet thread using GCC/Clang lock-free
+   atomics operations, Emscripten atomics operations and the Wasm Worker API
+   thread synchronization primitives. See :ref:`wasm_workers` for more
+   information.
 
-3. Utilize the ``emscripten_audio_worklet_post_function_*()`` family of event passing functions. These functions operate similar to the ``emscripten_wasm_worker_post_function_*()`` functions. They enable a ``postMessage()`` style of communication, where the audio worklet thread and the main browser thread can send messages (function call dispatches) to each other.
+3. Utilize the ``emscripten_audio_worklet_post_function_*()`` family of event
+   passing functions. These functions operate similar to the
+   ``emscripten_wasm_worker_post_function_*()`` functions. They enable a
+   ``postMessage()`` style of communication, where the audio worklet thread and
+   the main browser thread can send messages (function call dispatches) to each
+   other.
 
 
 More Examples

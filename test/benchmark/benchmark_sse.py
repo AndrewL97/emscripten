@@ -7,35 +7,37 @@
 import json
 import os
 import re
-import shutil
+import subprocess
 import sys
-import tempfile
-from subprocess import Popen
 
-__rootpath__ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+__scriptdir__ = os.path.dirname(os.path.abspath(__file__))
+__testdir__ = os.path.dirname(os.path.dirname(__file__))
+__rootpath__ = os.path.dirname(__testdir__)
+print(__rootpath__)
 sys.path.insert(0, __rootpath__)
+sys.path.insert(0, __testdir__)
 
-from tools.shared import WINDOWS, CLANG_CXX, EMCC, PIPE
-from tools.shared import run_process
-from tools.config import V8_ENGINE
-from common import EMRUN, test_file
 import clang_native
+from common import CLANG_CXX, EMCC, EMRUN, test_file
 
-temp_dir = tempfile.mkdtemp()
+from tools import config
+from tools.utils import WINDOWS, run_process, write_file
 
 # System info
-system_info = Popen([EMRUN, '--system_info'], stdout=PIPE, stderr=PIPE).communicate()
+system_info = subprocess.check_output([EMRUN, '--system_info'], stderr=subprocess.STDOUT, text=True)
 
 # Native info
-native_info = Popen(['clang', '-v'], stdout=PIPE, stderr=PIPE).communicate()
+native_info = subprocess.check_output(['clang', '-v'], stderr=subprocess.STDOUT, text=True)
 
 # Emscripten info
-emscripten_info = Popen([EMCC, '-v'], stdout=PIPE, stderr=PIPE).communicate()
+emscripten_info = subprocess.check_output([EMCC, '-v'], stderr=subprocess.STDOUT, text=True)
 
 
 def run_benchmark(benchmark_file, results_file, build_args):
+    out_dir = os.path.join(__rootpath__, 'out')
+    results_file = os.path.join(out_dir, results_file)
     # Run native build
-    out_file = os.path.join(temp_dir, 'benchmark_sse_native')
+    out_file = os.path.join(out_dir, 'benchmark_sse_native')
     if WINDOWS:
         out_file += '.exe'
     cmd = [CLANG_CXX] + clang_native.get_clang_native_args() + [benchmark_file, '-O3', '-o', out_file]
@@ -43,36 +45,27 @@ def run_benchmark(benchmark_file, results_file, build_args):
     print(' '.join(cmd))
     run_process(cmd, env=clang_native.get_clang_native_env())
 
-    native_results = Popen([out_file], stdout=PIPE, stderr=PIPE).communicate()
-    print(native_results[0])
+    native_results = subprocess.check_output(out_file)
+    print('native_results', native_results)
 
     # Run emscripten build
-    out_file = os.path.join(temp_dir, 'benchmark_sse_html.js')
-    cmd = [EMCC, benchmark_file, '-O3', '-sTOTAL_MEMORY=536870912', '-o', out_file] + build_args
+    out_file = os.path.join(out_dir, 'benchmark_sse_html.js')
+    cmd = [EMCC, benchmark_file, '-sENVIRONMENT=web,shell,node', '-msimd128', '-O3', '-sTOTAL_MEMORY=536870912', '-o', out_file] + build_args
     print('Building Emscripten version of the benchmark:')
     print(' '.join(cmd))
     run_process(cmd)
 
-    cmd = V8_ENGINE + ['--experimental-wasm-simd', os.path.basename(out_file)]
+    cmd = config.V8_ENGINE + [os.path.basename(out_file)]
     print(' '.join(cmd))
-    old_dir = os.getcwd()
-    os.chdir(os.path.dirname(out_file))
-    wasm_results = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
-    os.chdir(old_dir)
+    wasm_results = subprocess.check_output(cmd, cwd=out_dir, text=True)
 
-    if not wasm_results:
-        raise Exception('Unable to run benchmark in V8!')
-
-    if not wasm_results[0].strip():
-        print(wasm_results[1])
-        sys.exit(1)
-
-    print(wasm_results[0])
+    print('wasm_results', wasm_results)
 
     def strip_comments(text):
-        return re.sub('//.*?\n|/\*.*?\*/', '', text, re.S) # noqa
+        return re.sub(r'//.*?\n|/\*.*?\*/', '', text, flags=re.S)
 
-    benchmark_results = strip_comments(wasm_results[0])
+    benchmark_results = strip_comments(wasm_results)
+    print('stripped', benchmark_results)
 
     # Strip out unwanted print output.
     benchmark_results = benchmark_results[benchmark_results.find('{'):].strip()
@@ -81,9 +74,7 @@ def run_benchmark(benchmark_file, results_file, build_args):
 
     print(benchmark_results)
 
-    shutil.rmtree(temp_dir)
-
-    native_results = json.loads(native_results[0])
+    native_results = json.loads(native_results)
     benchmark_results = benchmark_results[benchmark_results.index('{'):benchmark_results.rindex('}') + 1]
     wasm_results = json.loads(benchmark_results)
 
@@ -94,11 +85,11 @@ def run_benchmark(benchmark_file, results_file, build_args):
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
     <script src="https://code.highcharts.com/highcharts.js"></script>
     <script src="https://code.highcharts.com/modules/exporting.js"></script><b>System Info:</b><br/>
-    ''' + system_info[0].replace('\n', '<br/>') + '''
+    ''' + system_info.replace('\n', '<br/>') + '''
     <b>Native Clang Compiler:</b><br/>
-    ''' + native_info[1].replace('\n', '<br/>') + '''
+    ''' + native_info.replace('\n', '<br/>') + '''
     <b>Emscripten Compiler:</b><br/>
-    ''' + emscripten_info[0].replace('\n', '<br/>')
+    ''' + emscripten_info.replace('\n', '<br/>')
 
     charts_native = {}
     charts_html = {}
@@ -121,9 +112,9 @@ def run_benchmark(benchmark_file, results_file, build_args):
 
     def format_comparison(a, b):
         if a < b and a != 0:
-            return "<span style='color:green;font-weight:bold;'> {:10.2f}".format(b / a) + 'x FASTER</span>'
+            return f"<span style='color:green;font-weight:bold;'> {b / a:10.2f}" + 'x FASTER</span>'
         elif b != 0:
-            return "<span style='color:red;font-weight:bold;'> {:10.2f}".format(a / b) + 'x SLOWER</span>'
+            return f"<span style='color:red;font-weight:bold;'> {a / b:10.2f}" + 'x SLOWER</span>'
         else:
             return "<span style='color:red;font-weight:bold;'> NaN </span>"
 
@@ -154,7 +145,7 @@ def run_benchmark(benchmark_file, results_file, build_args):
             nativeScalarResults += [str(nsc)]
             nativeSimdResults += [str(nsi)]
             html_result = find_result_in_category(wasm_results, result['category'])
-            textual_results_native += 'Native ' + result['category'] + ': ' + "{:10.4f}".format(nsc) + 'ns -> ' + "{:10.4f}".format(nsi) + 'ns. '
+            textual_results_native += 'Native ' + result['category'] + ': ' + f"{nsc:10.4f}" + 'ns -> ' + f"{nsi:10.4f}" + 'ns. '
             textual_results_native += 'Native SSE is ' + format_comparison(nsi, nsc) + ' than native scalar. &nbsp; &nbsp; &nbsp; &nbsp; <br />'
 
             if html_result is not None:
@@ -162,7 +153,7 @@ def run_benchmark(benchmark_file, results_file, build_args):
                 htmlScalarResults += [str(hsc)]
                 hsi = html_result['simd']
                 htmlSimdResults += [str(hsi)]
-                textual_results_html += 'JS ' + result['category'] + ': ' + "{:10.4f}".format(hsc) + 'ns -> ' + "{:10.4f}".format(hsi) + 'ns. '
+                textual_results_html += 'JS ' + result['category'] + ': ' + f"{hsc:10.4f}" + 'ns -> ' + f"{hsi:10.4f}" + 'ns. '
                 textual_results_html += 'JS SSE is ' + format_comparison(hsi, hsc) + ' than JS scalar. &nbsp; &nbsp; &nbsp; &nbsp; <br />'
                 textual_results_html2 += 'JS ' + result['category'] + ': JS scalar is ' + format_comparison(hsc, nsc) + ' than native scalar. &nbsp; &nbsp; &nbsp; &nbsp; <br />'
                 textual_results_html3 += 'JS ' + result['category'] + ': JS SSE is ' + format_comparison(hsi, nsi) + ' than native SSE. &nbsp; &nbsp; &nbsp; &nbsp; <br />'
@@ -287,19 +278,19 @@ def run_benchmark(benchmark_file, results_file, build_args):
 
     html += '</body></html>'
 
-    open(results_file, 'w').write(html)
+    write_file(results_file, html)
     print('Wrote ' + str(len(html)) + ' bytes to file ' + results_file + '.')
 
 
 if __name__ == '__main__':
     suite = sys.argv[1].lower() if len(sys.argv) == 2 else None
-    if suite in ['sse', 'sse1']:
-        run_benchmark(test_file('sse/benchmark_sse1.cpp'), 'results_sse1.html', ['-msse'])
+    if suite in {'sse', 'sse1'}:
+        run_benchmark(test_file('benchmark/benchmark_sse1.cpp'), 'results_sse1.html', ['-msse'])
     elif suite == 'sse2':
-        run_benchmark(test_file('sse/benchmark_sse2.cpp'), 'results_sse2.html', ['-msse2'])
+        run_benchmark(test_file('benchmark/benchmark_sse2.cpp'), 'results_sse2.html', ['-msse2'])
     elif suite == 'sse3':
-        run_benchmark(test_file('sse/benchmark_sse3.cpp'), 'results_sse3.html', ['-msse3'])
+        run_benchmark(test_file('benchmark/benchmark_sse3.cpp'), 'results_sse3.html', ['-msse3'])
     elif suite == 'ssse3':
-        run_benchmark(test_file('sse/benchmark_ssse3.cpp'), 'results_ssse3.html', ['-mssse3'])
+        run_benchmark(test_file('benchmark/benchmark_ssse3.cpp'), 'results_ssse3.html', ['-mssse3'])
     else:
-        raise Exception('Usage: python test/benchmark_sse.py sse1|sse2|sse3')
+        raise Exception('Usage: python test/benchmark/benchmark_sse.py sse1|sse2|sse3')

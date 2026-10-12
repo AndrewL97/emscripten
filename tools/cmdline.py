@@ -3,47 +3,46 @@
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
 # found in the LICENSE file.
 
-from tools.toolchain_profiler import ToolchainProfiler
-
 import json
 import logging
 import os
 import re
 import shlex
-import sys
 from enum import Enum, auto, unique
 from subprocess import PIPE
 
-from tools import shared, utils, ports, diagnostics, config
-from tools import cache, feature_matrix, colored_logger
-from tools.shared import exit_with_error
-from tools.settings import settings, user_settings, MEM_SIZE_SETTINGS
-from tools.utils import removeprefix, read_file
+from tools import (
+  cache,
+  colored_logger,
+  config,
+  diagnostics,
+  feature_matrix,
+  shared,
+  utils,
+)
+from tools.settings import MEM_SIZE_SETTINGS, settings, user_settings
+from tools.toolchain_profiler import ToolchainProfiler
+from tools.utils import exit_with_error, read_file
 
-SIMD_INTEL_FEATURE_TOWER = ['-msse', '-msse2', '-msse3', '-mssse3', '-msse4.1', '-msse4.2', '-msse4', '-mavx', '-mavx2']
+SIMD_INTEL_FEATURE_TOWER = ['-msse', '-msse2', '-msse3', '-mssse3', '-msse4.1', '-msse4.2', '-msse4', '-mavx', '-mavx2', '-mfma']
 SIMD_NEON_FLAGS = ['-mfpu=neon']
 CLANG_FLAGS_WITH_ARGS = {
-    '-MT', '-MF', '-MJ', '-MQ', '-D', '-U', '-o', '-x',
-    '-Xpreprocessor', '-include', '-imacros', '-idirafter',
-    '-iprefix', '-iwithprefix', '-iwithprefixbefore',
-    '-isysroot', '-imultilib', '-A', '-isystem', '-iquote',
-    '-install_name', '-compatibility_version', '-mllvm',
-    '-current_version', '-I', '-L', '-include-pch', '-u',
-    '-undefined', '-target', '-Xlinker', '-Xclang', '-z',
+  '-MT', '-MF', '-MJ', '-MQ', '-D', '-U', '-o', '-x',
+  '-Xpreprocessor', '-include', '-imacros', '-idirafter',
+  '-iprefix', '-iwithprefix', '-iwithprefixbefore',
+  '-isysroot', '-imultilib', '-A', '-isystem', '-iquote',
+  '-install_name', '-compatibility_version', '-mllvm',
+  '-current_version', '-I', '-L', '-include-pch', '-u',
+  '-undefined', '-target', '-Xlinker', '-Xclang', '-z',
 }
-# These symbol names are allowed in INCOMING_MODULE_JS_API but are not part of the
-# default set.
-EXTRA_INCOMING_JS_API = [
-  'fetchSettings',
-]
+
 
 logger = logging.getLogger('args')
 
 
 @unique
 class OFormat(Enum):
-  # Output a relocatable object file.  We use this
-  # today for `-r` and `-shared`.
+  # Output a relocatable object file. i.e. `-r` linker flag
   OBJECT = auto()
   WASM = auto()
   JS = auto()
@@ -53,82 +52,78 @@ class OFormat(Enum):
 
 
 class EmccOptions:
-  def __init__(self):
-    self.target = ''
-    self.output_file = None
-    self.input_files = []
-    self.no_minify = False
-    self.post_link = False
-    self.save_temps = False
-    self.executable = False
-    self.compiler_wrapper = None
-    self.oformat = None
-    self.requested_debug = None
-    self.emit_symbol_map = False
-    self.use_closure_compiler = None
-    self.js_transform = None
-    self.pre_js = [] # before all js
-    self.post_js = [] # after all js
-    self.extern_pre_js = [] # before all js, external to optimized code
-    self.extern_post_js = [] # after all js, external to optimized code
-    self.preload_files = []
-    self.embed_files = []
-    self.exclude_files = []
-    self.ignore_dynamic_linking = False
-    self.shell_path = None
-    self.source_map_base = ''
-    self.emit_tsd = ''
-    self.embind_emit_tsd = ''
-    self.emrun = False
-    self.cpu_profiler = False
-    self.memory_profiler = False
-    self.use_preload_cache = False
-    self.use_preload_plugins = False
-    self.valid_abspaths = []
-    # Specifies the line ending format to use for all generated text files.
-    # Defaults to using the native EOL on each platform (\r\n on Windows, \n on
-    # Linux & MacOS)
-    self.output_eol = os.linesep
-    self.no_entry = False
-    self.shared = False
-    self.relocatable = False
-    self.reproduce = None
-    self.syntax_only = False
-    self.dash_c = False
-    self.dash_E = False
-    self.dash_S = False
-    self.dash_M = False
-    self.input_language = None
-    self.nostdlib = False
-    self.nostdlibxx = False
-    self.nodefaultlibs = False
-    self.nolibc = False
-    self.nostartfiles = False
-    self.sanitize_minimal_runtime = False
-    self.sanitize = set()
-    self.lib_dirs = []
+  check = False
+  clear_cache = False
+  clear_ports = False
+  cpu_profiler = False
+  dash_E = False
+  dash_M = False
+  dash_S = False
+  dash_c = False
+  dylibs: list[str] = []
+  embed_files: list[str] = []
+  emit_symbol_map = False
+  emit_tsd = ''
+  emrun = False
+  exclude_files: list[str] = []
+  executable = False
+  extern_post_js: list[str] = [] # after all js, external to optimized code
+  extern_pre_js: list[str] = [] # before all js, external to optimized code
+  fast_math = False
+  ignore_dynamic_linking = False
+  input_files: list[str] = []
+  input_language = None
+  js_transform = None
+  lib_dirs: list[str] = []
+  lto: str | None = None
+  memory_profiler = False
+  no_entry = False
+  no_minify = False
+  nodefaultlibs = False
+  openmp = False
+  nolibc = False
+  nostartfiles = False
+  nostdlib = False
+  nostdlibxx = False
+  oformat = None
+  # Specifies the line ending format to use for all generated text files.
+  # Defaults to using the native EOL on each platform (\r\n on Windows, \n on
+  # Linux & MacOS)
+  output_eol = os.linesep
+  output_file = None
+  post_js: list[str] = [] # after all js
+  post_link = False
+  pre_js: list[str] = [] # before all js
+  preload_files: list[str] = []
+  relocatable = False
+  reproduce = os.getenv('EMCC_REPRODUCE')  # None by default.
+  requested_debug = None
+  sanitize: set[str] = set()
+  sanitize_minimal_runtime = False
+  show_ports = False
+  s_args: list[str] = []
+  save_temps = False
+  shared = False
+  shell_html = None
+  source_map_base = ''
+  syntax_only = False
+  target = ''
+  use_closure_compiler = None
+  use_ports: list[str] = []
+  use_preload_cache = False
+  use_preload_plugins = False
+  valid_abspaths: list[str] = []
 
 
-def is_int(s):
+# Global/singleton EmccOptions
+options = EmccOptions()
+
+
+def is_unsigned_int(s):
   try:
-    int(s)
-    return True
+    return int(s) >= 0
   except ValueError:
     return False
-
-
-def validate_arg_level(level_string, max_level, err_msg, clamp=False):
-  try:
-    level = int(level_string)
-  except ValueError:
-    exit_with_error(err_msg)
-  if clamp:
-    if level > max_level:
-      logger.warning("optimization level '-O" + level_string + "' is not supported; using '-O" + str(max_level) + "' instead")
-      level = max_level
-  if not 0 <= level <= max_level:
-    exit_with_error(err_msg)
-  return level
 
 
 def version_string():
@@ -136,17 +131,17 @@ def version_string():
   # look up and find the revision in a parent directory that is a git repo
   revision_suffix = ''
   if os.path.exists(utils.path_from_root('.git')):
-    git_rev = shared.run_process(
+    git_rev = utils.run_process(
       ['git', 'rev-parse', 'HEAD'],
       stdout=PIPE, stderr=PIPE, cwd=utils.path_from_root()).stdout.strip()
-    revision_suffix = ' (%s)' % git_rev
+    revision_suffix = f' ({git_rev})'
   elif os.path.exists(utils.path_from_root('emscripten-revision.txt')):
     rev = read_file(utils.path_from_root('emscripten-revision.txt')).strip()
-    revision_suffix = ' (%s)' % rev
+    revision_suffix = f' ({rev})'
   return f'emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) {utils.EMSCRIPTEN_VERSION}{revision_suffix}'
 
 
-def is_valid_abspath(options, path_name):
+def is_valid_abspath(path_name):
   # Any path that is underneath the emscripten repository root must be ok.
   if utils.normalize_path(path_name).startswith(utils.normalize_path(utils.path_from_root())):
     return True
@@ -158,7 +153,7 @@ def is_valid_abspath(options, path_name):
 
     # return true, if the common prefix of both is equal to directory
     # e.g. /a/b/c/d.rst and directory is /a/b, the common prefix is /a/b
-    return os.path.commonprefix([root, child]) == root
+    return os.path.commonpath([root, child]) == root
 
   for valid_abspath in options.valid_abspaths:
     if in_directory(valid_abspath, path_name):
@@ -174,44 +169,37 @@ def is_dash_s_for_emcc(args, i):
       return False
     arg = args[i + 1]
   else:
-    arg = removeprefix(args[i], '-s')
+    arg = args[i].removeprefix('-s')
   arg = arg.split('=')[0]
   return arg.isidentifier() and arg.isupper()
 
 
-def parse_s_args(args):
-  settings_changes = []
-  for i in range(len(args)):
-    if args[i].startswith('-s'):
-      if is_dash_s_for_emcc(args, i):
-        if args[i] == '-s':
-          key = args[i + 1]
-          args[i + 1] = ''
-        else:
-          key = removeprefix(args[i], '-s')
-        args[i] = ''
+def parse_s_args():
+  for arg in options.s_args:
+    assert arg.startswith('-s')
+    arg = arg.removeprefix('-s')
+    # If not = is specified default to 1
+    if '=' in arg:
+      key, value = arg.split('=', 1)
+    else:
+      key = arg
+      value = '1'
 
-        # If not = is specified default to 1
-        if '=' not in key:
-          key += '=1'
+    # Special handling of browser version targets. A version -1 means that the specific version
+    # is not supported at all. Replace those with INT32_MAX to make it possible to compare e.g.
+    # #if MIN_FIREFOX_VERSION < 68
+    if re.match(r'MIN_.*_VERSION', key):
+      try:
+        if int(value) < 0:
+          value = '0x7FFFFFFF'
+      except Exception:
+        pass
 
-        # Special handling of browser version targets. A version -1 means that the specific version
-        # is not supported at all. Replace those with INT32_MAX to make it possible to compare e.g.
-        # #if MIN_FIREFOX_VERSION < 68
-        if re.match(r'MIN_.*_VERSION(=.*)?', key):
-          try:
-            if int(key.split('=')[1]) < 0:
-              key = key.split('=')[0] + '=0x7FFFFFFF'
-          except Exception:
-            pass
-
-        settings_changes.append(key)
-
-  newargs = [a for a in args if a]
-  return (settings_changes, newargs)
+    key, value = normalize_boolean_setting(key, value)
+    user_settings[key] = value
 
 
-def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
+def parse_args(newargs):  # ruff: ignore[complex-structure, too-many-branches, too-many-statements]
   """Future modifications should consider refactoring to reduce complexity.
 
   * The McCabe cyclomatiic complexity is currently 117 vs 10 recommended.
@@ -220,11 +208,11 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
 
   To revalidate these numbers, run `ruff check --select=C901,PLR091`.
   """
-  options = EmccOptions()
-  settings_changes = []
-  user_js_defines = []
-  should_exit = False
   skip = False
+  builtin_settings = set(settings.keys())
+  LEGACY_ARGS = {'--js-opts', '--llvm-opts', '--llvm-lto', '--memory-init-file'}
+  LEGACY_FLAGS = {'--separate-asm', '--jcache', '--proxy-to-worker', '--default-obj-ext',
+                  '--embind-emit-tsd', '--remove-duplicates', '--no-heap-copy'}
 
   for i in range(len(newargs)):
     if skip:
@@ -244,8 +232,6 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       # because that next arg could, for example, start with `-o` and we don't want
       # to confuse that with a normal `-o` flag.
       skip = True
-    elif arg == '-s' and is_dash_s_for_emcc(newargs, i):
-      skip = True
 
     def check_flag(value):
       # Check for and consume a flag
@@ -255,9 +241,9 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       return False
 
     def check_arg(name):
-      nonlocal arg_value
+      nonlocal arg, arg_value
       if arg.startswith(name) and '=' in arg:
-        arg_value = arg.split('=', 1)[1]
+        arg, arg_value = arg.split('=', 1)
         newargs[i] = ''
         return True
       if arg == name:
@@ -279,48 +265,64 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
     def consume_arg_file():
       name = consume_arg()
       if not os.path.isfile(name):
-        exit_with_error("'%s': file not found: '%s'" % (arg, name))
+        exit_with_error(f"'{arg}': file not found: '{name}'")
       return name
 
-    if arg.startswith('-O'):
+    if arg in LEGACY_FLAGS:
+      diagnostics.warning('deprecated', f'{arg} is no longer supported')
+      continue
+
+    for legacy_arg in LEGACY_ARGS:
+      if check_arg(legacy_arg):
+        consume_arg()
+        diagnostics.warning('deprecated', f'{arg} is no longer supported')
+        continue
+
+    if arg.startswith('-s') and is_dash_s_for_emcc(newargs, i):
+      s_arg = arg
+      if arg == '-s':
+        s_arg = '-s' + newargs[i + 1]
+        newargs[i + 1] = ''
+      newargs[i] = ''
+      options.s_args.append(s_arg)
+    elif arg.startswith('-O'):
       # Let -O default to -O2, which is what gcc does.
-      requested_level = removeprefix(arg, '-O') or '2'
-      if requested_level == 's':
-        requested_level = 2
+      opt_level = arg.removeprefix('-O') or '2'
+      if opt_level == 's':
+        opt_level = 2
         settings.SHRINK_LEVEL = 1
-      elif requested_level == 'z':
-        requested_level = 2
+      elif opt_level == 'z':
+        opt_level = 2
         settings.SHRINK_LEVEL = 2
-      elif requested_level == 'g':
-        requested_level = 1
+      elif opt_level == 'g':
+        opt_level = 1
         settings.SHRINK_LEVEL = 0
         settings.DEBUG_LEVEL = max(settings.DEBUG_LEVEL, 1)
-      elif requested_level == 'fast':
-        # TODO(https://github.com/emscripten-core/emscripten/issues/21497):
-        # If we ever map `-ffast-math` to `wasm-opt --fast-math` then
-        # then we should enable that too here.
-        requested_level = 3
+      elif opt_level == 'fast':
+        # -Ofast typically includes -ffast-math semantics
+        options.fast_math = True
+        opt_level = 3
         settings.SHRINK_LEVEL = 0
       else:
         settings.SHRINK_LEVEL = 0
-      settings.OPT_LEVEL = validate_arg_level(requested_level, 3, 'invalid optimization level: ' + arg, clamp=True)
-    elif check_arg('--js-opts'):
-      logger.warning('--js-opts ignored when using llvm backend')
-      consume_arg()
-    elif check_arg('--llvm-opts'):
-      diagnostics.warning('deprecated', '--llvm-opts is deprecated.  All non-emcc args are passed through to clang.')
+      try:
+        level = int(opt_level)
+      except ValueError:
+        exit_with_error(f"invalid integral value '{opt_level}' in '{arg}'")
+      if level > 3 or level < 0:
+        diagnostics.warn(f"optimization level '{arg}' is not supported; using '-O3' instead")
+        newargs[i] = '-O3'
+        level = 3
+      settings.OPT_LEVEL = level
     elif arg.startswith('-flto'):
       if '=' in arg:
-        settings.LTO = arg.split('=')[1]
+        options.lto = arg.split('=')[1]
       else:
-        settings.LTO = 'full'
+        options.lto = 'full'
     elif arg == "-fno-lto":
-      settings.LTO = 0
+      options.lto = None
     elif arg == "--save-temps":
       options.save_temps = True
-    elif check_arg('--llvm-lto'):
-      logger.warning('--llvm-lto ignored when using llvm backend')
-      consume_arg()
     elif check_arg('--closure-args'):
       args = consume_arg()
       settings.CLOSURE_ARGS += shlex.split(args)
@@ -346,7 +348,7 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       formats = [f.lower() for f in OFormat.__members__]
       fmt = consume_arg()
       if fmt not in formats:
-        exit_with_error('invalid output format: `%s` (must be one of %s)' % (fmt, formats))
+        exit_with_error(f'invalid output format: `{fmt}` (must be one of {formats})')
       options.oformat = getattr(OFormat, fmt.upper())
     elif check_arg('--minify'):
       arg = consume_arg()
@@ -355,60 +357,60 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       options.no_minify = True
     elif arg.startswith('-g'):
       options.requested_debug = arg
-      requested_level = removeprefix(arg, '-g') or '3'
-      if is_int(requested_level):
+      debug_level = arg.removeprefix('-g') or '3'
+      if is_unsigned_int(debug_level):
         # the -gX value is the debug level (-g1, -g2, etc.)
-        settings.DEBUG_LEVEL = validate_arg_level(requested_level, 4, 'invalid debug level: ' + arg)
-        if settings.DEBUG_LEVEL == 0:
+        debug_level = int(debug_level)
+        settings.DEBUG_LEVEL = debug_level
+        if debug_level == 0:
           # Set these explicitly so -g0 overrides previous -g on the cmdline
           settings.GENERATE_DWARF = 0
           settings.GENERATE_SOURCE_MAP = 0
           settings.EMIT_NAME_SECTION = 0
-        elif settings.DEBUG_LEVEL > 1:
+        elif debug_level > 1:
           settings.EMIT_NAME_SECTION = 1
         # if we don't need to preserve LLVM debug info, do not keep this flag
         # for clang
-        if settings.DEBUG_LEVEL < 3:
+        if debug_level < 3 and not (settings.GENERATE_SOURCE_MAP or settings.SEPARATE_DWARF):
           newargs[i] = '-g0'
-        else:
-          # for 3+, report -g3 to clang as -g4 etc. are not accepted
+        elif debug_level == 3:
+          settings.GENERATE_DWARF = 1
+        elif debug_level == 4:
+          # In the past we supported, -g4.  But clang never did.
+          # Lower this to -g3, and report a warning.
           newargs[i] = '-g3'
-          if settings.DEBUG_LEVEL == 3:
-            settings.GENERATE_DWARF = 1
-          if settings.DEBUG_LEVEL == 4:
-            settings.GENERATE_SOURCE_MAP = 1
-            diagnostics.warning('deprecated', 'please replace -g4 with -gsource-map')
-      else:
-        if requested_level.startswith('force_dwarf'):
-          exit_with_error('gforce_dwarf was a temporary option and is no longer necessary (use -g)')
-        elif requested_level.startswith('separate-dwarf'):
-          # emit full DWARF but also emit it in a file on the side
-          newargs[i] = '-g'
-          # if a file is provided, use that; otherwise use the default location
-          # (note that we do not know the default location until all args have
-          # been parsed, so just note True for now).
-          if requested_level != 'separate-dwarf':
-            if not requested_level.startswith('separate-dwarf=') or requested_level.count('=') != 1:
-              exit_with_error('invalid -gseparate-dwarf=FILENAME notation')
-            settings.SEPARATE_DWARF = requested_level.split('=')[1]
-          else:
-            settings.SEPARATE_DWARF = True
-          settings.GENERATE_DWARF = 1
-        elif requested_level in ['source-map', 'source-map=inline']:
-          settings.GENERATE_SOURCE_MAP = 1 if requested_level == 'source-map' else 2
-          settings.EMIT_NAME_SECTION = 1
-          newargs[i] = '-g'
-        elif requested_level == 'z':
-          # Ignore `-gz`.  We don't support debug info compression.
-          continue
+          diagnostics.warning('deprecated', 'please replace -g4 with -gsource-map')
+          settings.GENERATE_SOURCE_MAP = 1
+        elif debug_level > 4:
+          exit_with_error(f"unknown argument: '{arg}'")
+      elif debug_level.startswith('force_dwarf'):
+        exit_with_error('gforce_dwarf was a temporary option and is no longer necessary (use -g)')
+      elif debug_level.startswith('separate-dwarf'):
+        # emit full DWARF but also emit it in a file on the side
+        newargs[i] = '-g'
+        # if a file is provided, use that; otherwise use the default location
+        # (note that we do not know the default location until all args have
+        # been parsed, so just note True for now).
+        if debug_level != 'separate-dwarf':
+          if not debug_level.startswith('separate-dwarf=') or debug_level.count('=') != 1:
+            exit_with_error('invalid -gseparate-dwarf=FILENAME notation')
+          settings.SEPARATE_DWARF = debug_level.split('=')[1]
         else:
-          # Other non-integer levels (e.g. -gline-tables-only or -gdwarf-5) are
-          # usually clang flags that emit DWARF. So we pass them through to
-          # clang and make the emscripten code treat it like any other DWARF.
-          settings.GENERATE_DWARF = 1
-          settings.EMIT_NAME_SECTION = 1
-        # In all cases set the emscripten debug level to 3 so that we do not
-        # strip during link (during compile, this does not make a difference).
+          settings.SEPARATE_DWARF = True
+        settings.GENERATE_DWARF = 1
+        settings.DEBUG_LEVEL = 3
+      elif debug_level in {'source-map', 'source-map=inline'}:
+        settings.GENERATE_SOURCE_MAP = 1 if debug_level == 'source-map' else 2
+        newargs[i] = '-g'
+      elif debug_level == 'z':
+        # Ignore `-gz`.  We don't support debug info compression.
+        pass
+      else:
+        # Other non-integer levels (e.g. -gline-tables-only or -gdwarf-5) are
+        # usually clang flags that emit DWARF. So we pass them through to
+        # clang and make the emscripten code treat it like any other DWARF.
+        settings.GENERATE_DWARF = 1
+        settings.EMIT_NAME_SECTION = 1
         settings.DEBUG_LEVEL = 3
     elif check_flag('-profiling') or check_flag('--profiling'):
       settings.DEBUG_LEVEL = max(settings.DEBUG_LEVEL, 2)
@@ -419,7 +421,7 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       if newargs[i] == '--memoryprofiler':
         options.memory_profiler = True
       newargs[i] = ''
-      settings_changes.append('EMSCRIPTEN_TRACING=1')
+      settings.EMSCRIPTEN_TRACING = 1
     elif check_flag('--emit-symbol-map'):
       options.emit_symbol_map = True
       settings.EMIT_SYMBOL_MAP = 1
@@ -433,8 +435,6 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       options.exclude_files.append(consume_arg())
     elif check_flag('--use-preload-cache'):
       options.use_preload_cache = True
-    elif check_flag('--no-heap-copy'):
-      diagnostics.warning('legacy-settings', 'ignoring legacy flag --no-heap-copy (that is the only mode supported now)')
     elif check_flag('--use-preload-plugins'):
       options.use_preload_plugins = True
     elif check_flag('--ignore-dynamic-linking'):
@@ -444,20 +444,13 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
     elif arg == '-###':
       shared.SKIP_SUBPROCS = True
     elif check_arg('--shell-file'):
-      options.shell_path = consume_arg_file()
+      options.shell_html = consume_arg_file()
     elif check_arg('--source-map-base'):
       options.source_map_base = consume_arg()
-    elif check_arg('--embind-emit-tsd'):
-      diagnostics.warning('deprecated', '--embind-emit-tsd is deprecated.  Use --emit-tsd instead.')
-      options.emit_tsd = consume_arg()
     elif check_arg('--emit-tsd'):
       options.emit_tsd = consume_arg()
     elif check_flag('--no-entry'):
       options.no_entry = True
-    elif check_flag('--remove-duplicates'):
-      diagnostics.warning('legacy-settings', '--remove-duplicates is deprecated as it is no longer needed. If you cannot link without it, file a bug with a testcase')
-    elif check_flag('--jcache'):
-      logger.error('jcache is no longer supported')
     elif check_arg('--cache'):
       config.CACHE = os.path.abspath(consume_arg())
       cache.setup()
@@ -465,36 +458,20 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       # libraries)
       os.environ['EM_CACHE'] = config.CACHE
     elif check_flag('--clear-cache'):
-      logger.info('clearing cache as requested by --clear-cache: `%s`', cache.cachedir)
-      cache.erase()
-      shared.perform_sanity_checks() # this is a good time for a sanity check
-      should_exit = True
+      options.clear_cache = True
     elif check_flag('--clear-ports'):
-      logger.info('clearing ports and cache as requested by --clear-ports')
-      ports.clear()
-      cache.erase()
-      shared.perform_sanity_checks() # this is a good time for a sanity check
-      should_exit = True
+      options.clear_ports = True
     elif check_flag('--check'):
-      print(version_string(), file=sys.stderr)
-      shared.check_sanity(force=True)
-      should_exit = True
+      options.check = True
     elif check_flag('--show-ports'):
-      ports.show_ports()
-      should_exit = True
-    elif check_arg('--memory-init-file'):
-      exit_with_error('--memory-init-file is no longer supported')
-    elif check_flag('--proxy-to-worker'):
-      settings_changes.append('PROXY_TO_WORKER=1')
+      options.show_ports = True
     elif check_arg('--valid-abspath'):
       options.valid_abspaths.append(consume_arg())
-    elif check_flag('--separate-asm'):
-      exit_with_error('cannot --separate-asm with the wasm backend, since not emitting asm.js')
     elif arg.startswith(('-I', '-L')):
       path_name = arg[2:]
       # Look for '/' explicitly so that we can also diagnose identically if -I/foo/bar is passed on Windows.
       # Python since 3.13 does not treat '/foo/bar' as an absolute path on Windows.
-      if (path_name.startswith('/') or os.path.isabs(path_name)) and not is_valid_abspath(options, path_name):
+      if (path_name.startswith('/') or os.path.isabs(path_name)) and not is_valid_abspath(path_name):
         # Of course an absolute path to a non-system-specific library or header
         # is fine, and you can ignore this warning. The danger are system headers
         # that are e.g. x86 specific and non-portable. The emscripten bundled
@@ -511,31 +488,20 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
     elif check_flag('--cpuprofiler'):
       options.cpu_profiler = True
     elif check_flag('--threadprofiler'):
-      settings_changes.append('PTHREADS_PROFILING=1')
+      settings.PTHREADS_PROFILING = 1
+    elif arg in {'-fcolor-diagnostics', '-fdiagnostics-color', '-fdiagnostics-color=always'}:
+      colored_logger.enable(force=True)
+    elif arg in {'-fno-color-diagnostics', '-fno-diagnostics-color', '-fdiagnostics-color=never'}:
+      colored_logger.disable()
     elif arg == '-fno-exceptions':
       settings.DISABLE_EXCEPTION_CATCHING = 1
       settings.DISABLE_EXCEPTION_THROWING = 1
-      settings.WASM_EXCEPTIONS = 0
-    elif arg == '-mbulk-memory':
-      settings.BULK_MEMORY = 1
-      feature_matrix.enable_feature(feature_matrix.Feature.BULK_MEMORY,
-                                    '-mbulk-memory',
+    elif arg == '-mextended-const':
+      feature_matrix.enable_feature(feature_matrix.Feature.EXTENDED_CONST,
+                                    '-mextended-const',
                                     override=True)
-    elif arg == '-mno-bulk-memory':
-      settings.BULK_MEMORY = 0
-      feature_matrix.disable_feature(feature_matrix.Feature.BULK_MEMORY)
-    elif arg == '-msign-ext':
-      feature_matrix.enable_feature(feature_matrix.Feature.SIGN_EXT,
-                                    '-msign-ext',
-                                    override=True)
-    elif arg == '-mno-sign-ext':
-      feature_matrix.disable_feature(feature_matrix.Feature.SIGN_EXT)
-    elif arg == '-mnontrappting-fptoint':
-      feature_matrix.enable_feature(feature_matrix.Feature.NON_TRAPPING_FPTOINT,
-                                    '-mnontrapping-fptoint',
-                                    override=True)
-    elif arg == '-mno-nontrapping-fptoint':
-      feature_matrix.disable_feature(feature_matrix.Feature.NON_TRAPPING_FPTOINT)
+    elif arg == '-mno-extended-const':
+      feature_matrix.disable_feature(feature_matrix.Feature.EXTENDED_CONST)
     elif arg == '-fexceptions':
       # TODO Currently -fexceptions only means Emscripten EH. Switch to wasm
       # exception handling by default when -fexceptions is given when wasm
@@ -546,8 +512,8 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       settings.WASM_EXCEPTIONS = 1
     elif arg == '-fignore-exceptions':
       settings.DISABLE_EXCEPTION_CATCHING = 1
-    elif check_arg('--default-obj-ext'):
-      exit_with_error('--default-obj-ext is no longer supported by emcc')
+    elif arg == '-ffast-math':
+      options.fast_math = True
     elif arg.startswith('-fsanitize=cfi'):
       exit_with_error('emscripten does not currently support -fsanitize=cfi')
     elif check_arg('--output_eol') or check_arg('--output-eol'):
@@ -559,52 +525,54 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
       else:
         exit_with_error(f'invalid value for --output-eol: `{style}`')
     # Record PTHREADS setting because it controls whether --shared-memory is passed to lld
+    elif arg in {'-fopenmp', '-fopenmp=libomp'}:
+      options.openmp = 1
+      settings.PTHREADS = 1
+      settings.USE_PTHREADS = 1
     elif arg == '-pthread':
       settings.PTHREADS = 1
       # Also set the legacy setting name, in case use JS code depends on it.
       settings.USE_PTHREADS = 1
-    elif arg == '-no-pthread':
-      settings.PTHREADS = 0
-      # Also set the legacy setting name, in case use JS code depends on it.
-      settings.USE_PTHREADS = 0
     elif arg == '-pthreads':
       exit_with_error('unrecognized command-line option `-pthreads`; did you mean `-pthread`?')
-    elif arg in ('-fno-diagnostics-color', '-fdiagnostics-color=never'):
-      colored_logger.disable()
-      diagnostics.color_enabled = False
     elif arg == '-fno-rtti':
       settings.USE_RTTI = 0
     elif arg == '-frtti':
       settings.USE_RTTI = 1
     elif arg.startswith('-jsD'):
-      key = removeprefix(arg, '-jsD')
+      key = arg.removeprefix('-jsD')
       if '=' in key:
-        key, value = key.split('=')
+        key, value = key.split('=', 1)
       else:
         value = '1'
-      if key in settings.keys():
+      if key in builtin_settings:
         exit_with_error(f'{arg}: cannot change built-in settings values with a -jsD directive. Pass -s{key}={value} instead!')
-      user_js_defines += [(key, value)]
+      # Allow overrides/duplicates for user-defined -jsD flags
+      settings[key] = value
       newargs[i] = ''
     elif check_flag('-shared'):
       options.shared = True
     elif check_flag('-r'):
       options.relocatable = True
     elif arg.startswith('-o'):
-      options.output_file = removeprefix(arg, '-o')
+      options.output_file = arg.removeprefix('-o')
+    elif check_flag('-m64'):
+      settings.MEMORY64 = 1
+    elif check_flag('-m32'):
+      settings.MEMORY64 = 0
     elif check_arg('-target') or check_arg('--target'):
       options.target = consume_arg()
-      if options.target not in ('wasm32', 'wasm64', 'wasm64-unknown-emscripten', 'wasm32-unknown-emscripten'):
+      if options.target not in {'wasm32', 'wasm64', 'wasm64-unknown-emscripten', 'wasm32-unknown-emscripten'}:
         exit_with_error(f'unsupported target: {options.target} (emcc only supports wasm64-unknown-emscripten and wasm32-unknown-emscripten)')
     elif check_arg('--use-port'):
-      ports.handle_use_port_arg(settings, consume_arg())
-    elif arg in ('-c', '--precompile'):
+      options.use_ports.append(consume_arg())
+    elif arg in {'-c', '--precompile'}:
       options.dash_c = True
     elif arg == '-S':
       options.dash_S = True
     elif arg == '-E':
       options.dash_E = True
-    elif arg in ('-M', '-MM'):
+    elif arg in {'-M', '-MM'}:
       options.dash_M = True
     elif arg.startswith('-x'):
       # TODO(sbc): Handle multiple -x flags on the same command line
@@ -634,21 +602,15 @@ def parse_args(newargs):  # noqa: C901, PLR0912, PLR0915
     elif arg and (arg == '-' or not arg.startswith('-')):
       options.input_files.append(arg)
 
-  if should_exit:
-    sys.exit(0)
-
-  newargs = [a for a in newargs if a]
-  return options, settings_changes, user_js_defines, newargs
+  return [a for a in newargs if a]
 
 
 def expand_byte_size_suffixes(value):
-  """Given a string with KB/MB size suffixes, such as "32MB", computes how
-  many bytes that is and returns it as an integer.
-  """
+  """Convert a string with KB/MB size suffix, such as "32MB", to number of bytes."""
   value = value.strip()
   match = re.match(r'^(\d+)\s*([kmgt]?b)?$', value, re.I)
   if not match:
-    exit_with_error("invalid byte size `%s`.  Valid suffixes are: kb, mb, gb, tb" % value)
+    exit_with_error(f'invalid byte size `{value}`.  Valid suffixes are: kb, mb, gb, tb')
   value, suffix = match.groups()
   value = int(value)
   if suffix:
@@ -658,9 +620,10 @@ def expand_byte_size_suffixes(value):
 
 
 def parse_symbol_list_file(contents):
-  """Parse contents of one-symbol-per-line response file.  This format can by used
-  with, for example, -sEXPORTED_FUNCTIONS=@filename and avoids the need for any
-  kind of quoting or escaping.
+  """Parse contents of one-symbol-per-line response file.
+
+  This format can by used with, for example, -sEXPORTED_FUNCTIONS=@filename and
+  avoids the need for any kind of quoting or escaping.
   """
   values = contents.splitlines()
   return [v.strip() for v in values if not v.startswith('#')]
@@ -718,11 +681,11 @@ def parse_value(text, expected_type):
       if text[-1] != ']':
         raise ValueError('unterminated string list. expected final character to be "]"')
       text = text[1:-1]
-    if text.strip() == "":
+    if not text.strip():
       return []
     return parse_string_list_members(text)
 
-  if expected_type == list or (text and text[0] == '['):
+  if expected_type is list or (text and text[0] == '['):
     # if json parsing fails, we fall back to our own parser, which can handle a few
     # simpler syntaxes
     try:
@@ -731,16 +694,16 @@ def parse_value(text, expected_type):
       return parse_string_list(text)
 
     # if we succeeded in parsing as json, check some properties of it before returning
-    if type(parsed) not in (str, list):
-      raise ValueError(f'settings must be strings or lists (not ${type(parsed)})')
+    if type(parsed) not in {str, list}:
+      raise ValueError(f'settings must be strings or lists (not {type(parsed)})')
     if type(parsed) is list:
       for elem in parsed:
         if type(elem) is not str:
-          raise ValueError(f'list members in settings must be strings (not ${type(elem)})')
+          raise ValueError(f'list members in settings must be strings (not {type(elem)})')
 
     return parsed
 
-  if expected_type == float:
+  if expected_type is float:
     try:
       return float(text)
     except ValueError:
@@ -757,12 +720,9 @@ def parse_value(text, expected_type):
 
 
 def apply_user_settings():
-  """Take a map of users settings {NAME: VALUE} and apply them to the global
-  settings object.
-  """
-
+  """Take a map of users settings {NAME: VALUE} and apply them to the global settings object."""
   # Stash a copy of all available incoming APIs before the user can potentially override it
-  settings.ALL_INCOMING_MODULE_JS_API = settings.INCOMING_MODULE_JS_API + EXTRA_INCOMING_JS_API
+  settings.ALL_INCOMING_MODULE_JS_API = settings.INCOMING_MODULE_JS_API + settings.EXTRA_INCOMING_JS_API
 
   for key, value in user_settings.items():
     if key in settings.internal_settings:
@@ -780,16 +740,16 @@ def apply_user_settings():
 
     filename = None
     if value and value[0] == '@':
-      filename = removeprefix(value, '@')
+      filename = value.removeprefix('@')
       if not os.path.isfile(filename):
-        exit_with_error('%s: file not found parsing argument: %s=%s' % (filename, key, value))
+        exit_with_error(f'{filename}: file not found parsing argument: {key}={value}')
       value = read_file(filename).strip()
     else:
       value = value.replace('\\', '\\\\')
 
     expected_type = settings.types.get(key)
 
-    if filename and expected_type == list and value.strip()[0] != '[':
+    if filename and expected_type is list and value.strip()[0] != '[':
       # Prefer simpler one-line-per value parser
       value = parse_symbol_list_file(value)
     else:
@@ -804,10 +764,6 @@ def apply_user_settings():
       # used for warnings in emscripten.py
       settings.USER_EXPORTS = settings.EXPORTED_FUNCTIONS.copy()
 
-    # TODO(sbc): Remove this legacy way.
-    if key == 'WASM_OBJECT_FILES':
-      settings.LTO = 0 if value else 'full'
-
     if key == 'JSPI':
       settings.ASYNCIFY = 2
     if key == 'JSPI_IMPORTS':
@@ -821,10 +777,33 @@ def normalize_boolean_setting(name, value):
   # (note that *non*-boolean setting values have special meanings,
   # and we can't just flip them, so leave them as-is to be
   # handled in a special way later)
-  if name.startswith('NO_') and value in ('0', '1'):
-    name = removeprefix(name, 'NO_')
+  if name.startswith('NO_') and value in {'0', '1'}:
+    name = name.removeprefix('NO_')
     value = str(1 - int(value))
   return name, value
+
+
+def normalize_args(args):
+  """Normalize argument that can be specific as either one or two arguments.
+
+  In some cases these arguments are simply joined together.  For example
+  [`-o` `foo`] becomes `-ofoo` and [`-L` `bar`] becomes `-Lbar`.
+
+  In other cases they are joined by an equals sign.  For example ['--js-library`, `foo.js`]
+  becomes `--js-library=foo.js`.
+  """
+  equals_args = {'--js-library'}
+  join_args = {'-l', '-L', '-I', '-z', '-o', '-x', '-u'} | equals_args
+  for i in range(len(args)):
+    if args[i] in join_args:
+      if args[i] in equals_args:
+        args[i] += '='
+      if len(args) <= i + 1:
+        exit_with_error(f"option '{args[i]}' requires an argument")
+      args[i] += args[i + 1]
+      args[i + 1] = ''
+
+  return [a for a in args if a]
 
 
 @ToolchainProfiler.profile()
@@ -839,29 +818,13 @@ def parse_arguments(args):
   if not diagnostics.is_enabled('deprecated'):
     settings.WARN_DEPRECATED = 0
 
-  for i in range(len(newargs)):
-    if newargs[i] in ('-l', '-L', '-I', '-z', '--js-library', '-o', '-x', '-u'):
-      # Scan for flags that can be written as either one or two arguments
-      # and normalize them to the single argument form.
-      if newargs[i] == '--js-library':
-        newargs[i] += '='
-      if len(newargs) <= i + 1:
-        exit_with_error(f"option '{newargs[i]}' requires an argument")
-      newargs[i] += newargs[i + 1]
-      newargs[i + 1] = ''
-
-  options, settings_changes, user_js_defines, newargs = parse_args(newargs)
+  newargs = normalize_args(newargs)
+  newargs = parse_args(newargs)
 
   if options.post_link or options.oformat == OFormat.BARE:
     diagnostics.warning('experimental', '--oformat=bare/--post-link are experimental and subject to change.')
 
-  explicit_settings_changes, newargs = parse_s_args(newargs)
-  settings_changes += explicit_settings_changes
-
-  for s in settings_changes:
-    key, value = s.split('=', 1)
-    key, value = normalize_boolean_setting(key, value)
-    user_settings[key] = value
+  parse_s_args()
 
   # STRICT is used when applying settings so it needs to be applied first before
   # calling `apply_user_settings`.
@@ -869,11 +832,7 @@ def parse_arguments(args):
   if strict_cmdline:
     settings.STRICT = int(strict_cmdline)
 
-  # Apply user -jsD settings
-  for s in user_js_defines:
-    settings[s[0]] = s[1]
-
-  # Apply -s settings in newargs here (after optimization levels, so they can override them)
+  # Apply -s args here (after optimization levels, so they can override them)
   apply_user_settings()
 
-  return options, newargs
+  return newargs

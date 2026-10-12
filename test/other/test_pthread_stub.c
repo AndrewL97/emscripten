@@ -7,7 +7,7 @@
 #include <threads.h>
 #include <pthread.h>
 
-static void cleanup (void* arg) {
+void cleanup (void* arg) {
   printf("cleanup: %ld\n", (intptr_t)arg);
 }
 
@@ -22,12 +22,12 @@ void* start_pthread(void* arg) {
 }
 
 #define CHECK(X, EXPECTED) rtn = X; if (rtn != EXPECTED) printf(#X " returned %s\n", strerror(rtn)); assert(rtn == EXPECTED)
-#define CHECK_FAIL(X) CHECK(X, EAGAIN)
+#define CHECK_FAIL(X) CHECK(X, ENOTSUP)
 #define CHECK_SUCCESS(X) CHECK(X, 0)
 
 #define CHECK_C11(X, expected) rtn = X; if (rtn != expected) printf(#X " returned %d\n", rtn); assert(rtn == expected)
 #define CHECK_C11_SUCCESS(X) CHECK_C11(X, thrd_success)
-#define CHECK_C11_FAIL(X) CHECK_C11(X, thrd_nomem)
+#define CHECK_C11_FAIL(X) CHECK_C11(X, thrd_error)
 
 void test_c11_threads() {
   printf("test_c11_threads\n");
@@ -51,13 +51,15 @@ void test_pthreads() {
   int rtn;
   int res;
 
+  printf("__builtin_thread_pointer non-null: %d\n", __builtin_thread_pointer() != NULL);
+
   // pthread_atfork should silently succeed.
   CHECK_SUCCESS(pthread_atfork(NULL, NULL, NULL));
 
   pthread_t thread;
   CHECK_FAIL(pthread_create(&thread, NULL, start_pthread, NULL));
 
-  // Thread cleanup push/pop should still work for the main thrad
+  // Thread cleanup push/pop should still work for the main thread
   pthread_cleanup_push(cleanup, (void*)42);
   pthread_cleanup_pop(1);
 }

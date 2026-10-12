@@ -4,14 +4,28 @@
  * SPDX-License-Identifier: MIT
  */
 
-addToLibrary({
-  // TextDecoder constructor defaults to UTF-8
-#if TEXTDECODER == 2
-  $UTF8Decoder: "new TextDecoder()",
-#elif TEXTDECODER == 1
-  $UTF8Decoder: "typeof TextDecoder != 'undefined' ? new TextDecoder() : undefined",
+#if TEXTDECODER != 1 && TEXTDECODER != 2
+#error "TEXTDECODER must be either 1 or 2"
 #endif
 
+addToLibrary({
+  // In -sAUDIO_WORKLET builds, TextDecoder will not exist in AudioWorkletGlobalScope,
+  // so we cannot try to unconditionally initialize it in that build mode.
+#if TEXTDECODER == 2 && !AUDIO_WORKLET
+  // TextDecoder constructor defaults to UTF-8
+  $UTF8Decoder: 'new TextDecoder()',
+#else
+  $UTF8Decoder: 'globalThis.TextDecoder && new TextDecoder()',
+#endif
+
+  $findStringEnd__docs: `
+  /**
+   * heapOrArray is either a regular array, or a JavaScript typed array view.
+   * @param {number} idx
+   * @param {number=} maxBytesToRead
+   * @param {boolean=} ignoreNul
+   * @return {number}
+   */`,
   $findStringEnd: (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
     var maxIdx = idx + maxBytesToRead;
     if (ignoreNul) return maxIdx;
@@ -35,49 +49,33 @@ addToLibrary({
    * @param {boolean=} ignoreNul - If true, the function will not stop on a NUL character.
    * @return {string}
    */`,
-#if TEXTDECODER
-  $UTF8ArrayToString__deps: ['$UTF8Decoder', '$findStringEnd'],
+  $UTF8ArrayToString__deps: [
+    '$UTF8Decoder', '$findStringEnd',
+#if ASSERTIONS
+    '$warnOnce',
 #endif
+  ],
   $UTF8ArrayToString: (heapOrArray, idx = 0, maxBytesToRead, ignoreNul) => {
 #if CAN_ADDRESS_2GB
     idx >>>= 0;
 #endif
 
-#if TEXTDECODER
     var endPtr = findStringEnd(heapOrArray, idx, maxBytesToRead, ignoreNul);
-#else
-    var endIdx = idx + maxBytesToRead;
-#endif
 
 #if TEXTDECODER == 2
-    return UTF8Decoder.decode(heapOrArray.buffer ? {{{ getUnsharedTextDecoderView('heapOrArray', 'idx', 'endPtr') }}} : new Uint8Array(heapOrArray.slice(idx, endPtr)));
+    return UTF8Decoder.decode(heapOrArray.buffer ? {{{ getHeapViewOrCopy('heapOrArray', 'idx', 'endPtr') }}} : new Uint8Array(heapOrArray.slice(idx, endPtr)));
 #else // TEXTDECODER == 2
-#if TEXTDECODER
     // When using conditional TextDecoder, skip it for short strings as the overhead of the native call is not worth it.
     if (endPtr - idx > 16 && heapOrArray.buffer && UTF8Decoder) {
-      return UTF8Decoder.decode({{{ getUnsharedTextDecoderView('heapOrArray', 'idx', 'endPtr') }}});
+      return UTF8Decoder.decode({{{ getHeapViewOrCopy('heapOrArray', 'idx', 'endPtr') }}});
     }
-#endif // TEXTDECODER
     var str = '';
-#if TEXTDECODER
-    // If building with TextDecoder, we have already computed the string length
-    // above, so test loop end condition against that
     while (idx < endPtr) {
-#else
-    while (!(idx >= endIdx)) {
-#endif
       // For UTF8 byte structure, see:
       // http://en.wikipedia.org/wiki/UTF-8#Description
       // https://www.ietf.org/rfc/rfc2279.txt
       // https://tools.ietf.org/html/rfc3629
       var u0 = heapOrArray[idx++];
-#if !TEXTDECODER
-      // If not building with TextDecoder enabled, we don't know the string
-      // length, so scan for \0 byte.
-      // If building with TextDecoder, we know exactly at what byte index the
-      // string ends, so checking for nulls here would be redundant.
-      if (!u0 && !ignoreNul) return str;
-#endif
       if (!(u0 & 0x80)) { str += String.fromCharCode(u0); continue; }
       var u1 = heapOrArray[idx++] & 63;
       if ((u0 & 0xE0) == 0xC0) { str += String.fromCharCode(((u0 & 31) << 6) | u1); continue; }
@@ -86,7 +84,7 @@ addToLibrary({
         u0 = ((u0 & 15) << 12) | (u1 << 6) | u2;
       } else {
 #if ASSERTIONS
-        if ((u0 & 0xF8) != 0xF0) warnOnce('Invalid UTF-8 leading byte ' + ptrToString(u0) + ' encountered when deserializing a UTF-8 string in wasm memory to a JS string!');
+        if ((u0 & 0xF8) != 0xF0) warnOnce(`Invalid UTF-8 leading byte ${ptrToString(u0)} encountered when deserializing a UTF-8 string in wasm memory to a JS string!`);
 #endif
         u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (heapOrArray[idx++] & 63);
       }
@@ -123,7 +121,7 @@ addToLibrary({
 #endif
   $UTF8ToString: (ptr, maxBytesToRead, ignoreNul) => {
 #if ASSERTIONS
-    assert(typeof ptr == 'number', `UTF8ToString expects a number (got ${typeof ptr})`);
+    assert(typeof ptr === 'number', `UTF8ToString expects a number (got ${typeof ptr})`);
 #endif
 #if CAN_ADDRESS_2GB
     ptr >>>= 0;
@@ -131,7 +129,7 @@ addToLibrary({
 #if TEXTDECODER == 2
     if (!ptr) return '';
     var end = findStringEnd(HEAPU8, ptr, maxBytesToRead, ignoreNul);
-    return UTF8Decoder.decode({{{ getUnsharedTextDecoderView('HEAPU8', 'ptr', 'end') }}});
+    return UTF8Decoder.decode({{{ getHeapViewOrCopy('HEAPU8', 'ptr', 'end') }}});
 #else
     return ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead, ignoreNul) : '';
 #endif
@@ -159,6 +157,9 @@ addToLibrary({
    *                                   terminator.
    * @return {number} The number of bytes written, EXCLUDING the null terminator.
    */
+#if ASSERTIONS
+  $stringToUTF8Array__deps: ['$warnOnce'],
+#endif
   $stringToUTF8Array: (str, heap, outIdx, maxBytesToWrite) => {
 #if CAN_ADDRESS_2GB
     outIdx >>>= 0;
@@ -193,7 +194,7 @@ addToLibrary({
       } else {
         if (outIdx + 3 >= endIdx) break;
 #if ASSERTIONS
-        if (u > 0x10FFFF) warnOnce('Invalid Unicode code point ' + ptrToString(u) + ' encountered when serializing a JS string to a UTF-8 string in wasm memory! (Valid unicode code points should be in range 0-0x10FFFF).');
+        if (u > 0x10FFFF) warnOnce(`Invalid Unicode code point ${ptrToString(u)} encountered when serializing a JS string to a UTF-8 string in wasm memory! (Valid unicode code points should be in range 0-0x10FFFF).`);
 #endif
         heap[outIdx++] = 0xF0 | (u >> 18);
         heap[outIdx++] = 0x80 | ((u >> 12) & 63);
@@ -221,7 +222,7 @@ addToLibrary({
   $stringToUTF8__deps: ['$stringToUTF8Array'],
   $stringToUTF8: (str, outPtr, maxBytesToWrite) => {
 #if ASSERTIONS
-    assert(typeof maxBytesToWrite == 'number', 'stringToUTF8(str, outPtr, maxBytesToWrite) is missing the third parameter that specifies the length of the output buffer!');
+    assert(typeof maxBytesToWrite === 'number', 'stringToUTF8 requires a third parameter that specifies the length of the output buffer');
 #endif
     return stringToUTF8Array(str, HEAPU8, outPtr, maxBytesToWrite);
   },
@@ -310,32 +311,26 @@ addToLibrary({
 
 #if TEXTDECODER == 2
   $UTF16Decoder: "new TextDecoder('utf-16le');",
-#elif TEXTDECODER == 1
-  $UTF16Decoder: "typeof TextDecoder != 'undefined' ? new TextDecoder('utf-16le') : undefined;",
+#else
+  $UTF16Decoder: "globalThis.TextDecoder ? new TextDecoder('utf-16le') : undefined;",
 #endif
 
   // Given a pointer 'ptr' to a null-terminated UTF16LE-encoded string in the
   // emscripten HEAP, returns a copy of that string as a Javascript String
   // object.
-#if TEXTDECODER
   $UTF16ToString__deps: ['$UTF16Decoder', '$findStringEnd'],
-#endif
   $UTF16ToString: (ptr, maxBytesToRead, ignoreNul) => {
 #if ASSERTIONS
-    assert(ptr % 2 == 0, 'Pointer passed to UTF16ToString must be aligned to two bytes!');
+    assert(ptr % 2 == 0, 'pointer passed to UTF16ToString must be 2-byte aligned');
 #endif
     var idx = {{{ getHeapOffset('ptr', 'u16') }}};
-#if TEXTDECODER
     var endIdx = findStringEnd(HEAPU16, idx, maxBytesToRead / 2, ignoreNul);
 
 #if TEXTDECODER != 2
     // When using conditional TextDecoder, skip it for short strings as the overhead of the native call is not worth it.
     if (endIdx - idx > 16 && UTF16Decoder)
 #endif // TEXTDECODER != 2
-      return UTF16Decoder.decode({{{ getUnsharedTextDecoderView('HEAPU16', 'idx', 'endIdx') }}});
-#else
-    var maxIdx = idx + maxBytesToRead / 2;
-#endif // TEXTDECODER
+      return UTF16Decoder.decode({{{ getHeapViewOrCopy('HEAPU16', 'idx', 'endIdx') }}});
 
 #if TEXTDECODER != 2
     // Fallback: decode without UTF16Decoder
@@ -344,25 +339,8 @@ addToLibrary({
     // If maxBytesToRead is not passed explicitly, it will be undefined, and the
     // for-loop's condition will always evaluate to true. The loop is then
     // terminated on the first null char.
-    for (
-      var i = idx;
-#if TEXTDECODER
-      // If building with TextDecoder, we have already computed the string length
-      // above, so test loop end condition against that
-      i < endIdx;
-#else
-      !(i >= maxIdx);
-#endif
-      ++i
-    ) {
+    for (var i = idx; i < endIdx; ++i) {
       var codeUnit = HEAPU16[i];
-#if !TEXTDECODER
-      // If not building with TextDecoder enabled, we don't know the string
-      // length, so scan for \0 character.
-      // If building with TextDecoder, we know exactly at what index the
-      // string ends, so checking for nulls here would be redundant.
-      if (!codeUnit && !ignoreNul) break;
-#endif
       // fromCharCode constructs a character from a UTF-16 code unit, so we can
       // pass the UTF16 string right through.
       str += String.fromCharCode(codeUnit);
@@ -386,16 +364,16 @@ addToLibrary({
   //                    terminator will be written and nothing else.
   //                    maxBytesToWrite<2 does not write any bytes to the
   //                    output, not even the null terminator.
+  //                    Backwards compatibility: if maxBytesToWrite is not
+  //                    specified, assume an unsafe unbounded write is allowed.
   // Returns the number of bytes written, EXCLUDING the null terminator.
-  $stringToUTF16: (str, outPtr, maxBytesToWrite) => {
+  $stringToUTF16: (str, outPtr, maxBytesToWrite = 0x7FFFFFFF) => {
 #if ASSERTIONS
-    assert(outPtr % 2 == 0, 'Pointer passed to stringToUTF16 must be aligned to two bytes!');
+    assert(outPtr % 2 == 0, 'pointer passed to stringToUTF16 must be 2-byte aligned');
 #endif
 #if ASSERTIONS
-    assert(typeof maxBytesToWrite == 'number', 'stringToUTF16(str, outPtr, maxBytesToWrite) is missing the third parameter that specifies the length of the output buffer!');
+    assert(typeof maxBytesToWrite === 'number', 'stringToUTF16 requires a third parameter that specifies the length of the output buffer');
 #endif
-    // Backwards compatibility: if max bytes is not specified, assume unsafe unbounded write is allowed.
-    maxBytesToWrite ??= 0x7FFFFFFF;
     if (maxBytesToWrite < 2) return 0;
     maxBytesToWrite -= 2; // Null terminator.
     var startPtr = outPtr;
@@ -417,7 +395,7 @@ addToLibrary({
 
   $UTF32ToString: (ptr, maxBytesToRead, ignoreNul) => {
 #if ASSERTIONS
-    assert(ptr % 4 == 0, 'Pointer passed to UTF32ToString must be aligned to four bytes!');
+    assert(ptr % 4 == 0, 'pointer passed to UTF32ToString must be 2-byte aligned');
 #endif
     var str = '';
     var startIdx = {{{ getHeapOffset('ptr', 'u32') }}};
@@ -445,19 +423,19 @@ addToLibrary({
   //                    terminator will be written and nothing else.
   //                    maxBytesToWrite<4 does not write any bytes to the
   //                    output, not even the null terminator.
+  //                    Backwards compatibility: if maxBytesToWrite is not
+  //                    specified, assume an unsafe unbounded write is allowed.
   // Returns the number of bytes written, EXCLUDING the null terminator.
-  $stringToUTF32: (str, outPtr, maxBytesToWrite) => {
+  $stringToUTF32: (str, outPtr, maxBytesToWrite = 0x7FFFFFFF) => {
 #if CAN_ADDRESS_2GB
     outPtr >>>= 0;
 #endif
 #if ASSERTIONS
-    assert(outPtr % 4 == 0, 'Pointer passed to stringToUTF32 must be aligned to four bytes!');
+    assert(outPtr % 4 == 0, 'pointer passed to stringToUTF32 must be 4-byte aligned');
 #endif
 #if ASSERTIONS
-    assert(typeof maxBytesToWrite == 'number', 'stringToUTF32(str, outPtr, maxBytesToWrite) is missing the third parameter that specifies the length of the output buffer!');
+    assert(typeof maxBytesToWrite === 'number', 'stringToUTF32 requires a third parameter that specifies the length of the output buffer');
 #endif
-    // Backwards compatibility: if max bytes is not specified, assume unsafe unbounded write is allowed.
-    maxBytesToWrite ??= 0x7FFFFFFF;
     if (maxBytesToWrite < 4) return 0;
     var startPtr = outPtr;
     var endPtr = startPtr + maxBytesToWrite - 4;

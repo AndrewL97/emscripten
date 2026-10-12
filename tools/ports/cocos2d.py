@@ -5,10 +5,11 @@
 
 import os
 import re
+
 from tools import diagnostics
 
-TAG = 'version_3_3'
-HASH = 'd7b22660036c684f09754fcbbc7562984f02aa955eef2b76555270c63a717e6672c4fe695afb16280822e8b7c75d4b99ae21975a01a4ed51cad957f7783722cd'
+TAG = 'version_3_4'
+HASH = '38dc1406d679d05ecd89c11db05ceb72ac9feefae733e23c2f2bbb22e8b0728d8ec902cec53fa13eb3927a130e58e9ae4c7a4cd6479295d0fc6ad68b5168f930'
 
 deps = ['libpng', 'zlib']
 
@@ -36,9 +37,6 @@ def get(ports, settings, shared):
       '-DCC_KEYBOARD_SUPPORT',
       '-DGL_ES=1',
       '-DNDEBUG', # '-DCOCOS2D_DEBUG=1' 1 - error/warn, 2 - verbose
-      # Cocos2d source code hasn't switched to __EMSCRIPTEN__.
-      # See https://github.com/emscripten-ports/Cocos2d/pull/3
-      '-DEMSCRIPTEN',
       '-DCP_USE_DOUBLES=0',
       '-sUSE_ZLIB',
       '-sUSE_LIBPNG',
@@ -81,7 +79,7 @@ def make_source_list(cocos2d_root, cocos2dx_root):
   sources = []
 
   def add_makefile(makefile):
-    with open(makefile) as infile:
+    with open(makefile, encoding='utf-8') as infile:
       add_next = False
       for line in infile:
         if line.startswith('SOURCES'):

@@ -7,18 +7,16 @@
 
 #pragma once
 
-#if __cplusplus < 201103L
-#error Including <emscripten/val.h> requires building with -std=c++11 or newer!
-#endif
-
-#include <cassert>
-#include <array>
-#include <climits>
 #include <emscripten/wire.h>
+
+#include <array>
+#include <cassert>
+#include <climits>
 #include <cstdint> // uintptr_t
-#include <vector>
-#include <type_traits>
+#include <optional>
 #include <pthread.h>
+#include <type_traits>
+#include <vector>
 #if __cplusplus >= 202002L
 #include <coroutine>
 #include <exception>
@@ -68,6 +66,7 @@ void _emval_run_destructors(EM_DESTRUCTORS handle);
 
 EM_VAL _emval_new_array(void);
 EM_VAL _emval_new_array_from_memory_view(EM_VAL mv);
+void _emval_array_to_memory_view(EM_VAL dst, EM_VAL src);
 EM_VAL _emval_new_object(void);
 EM_VAL _emval_new_cstring(const char*);
 EM_VAL _emval_new_u8string(const char*);
@@ -108,6 +107,7 @@ bool _emval_is_number(EM_VAL object);
 bool _emval_is_string(EM_VAL object);
 bool _emval_in(EM_VAL item, EM_VAL object);
 bool _emval_delete(EM_VAL object, EM_VAL property);
+bool _emval_is_catchable_cpp_exception_object(EM_VAL object);
 [[noreturn]] bool _emval_throw(EM_VAL object);
 EM_VAL _emval_await(EM_VAL promise);
 EM_VAL _emval_iter_begin(EM_VAL iterable);
@@ -213,6 +213,12 @@ inline void writeGenericWireType(GenericWireType*& cursor, uint64_t wt) {
   ++cursor;
 }
 
+// Explicit overload for size_t to prevent fallback to the 32-bit generic template
+inline void writeGenericWireType(GenericWireType*& cursor, std::size_t wt) {
+  cursor->w[0].s = wt; // Uses the size_t member (64-bit in Memory64)
+  ++cursor;
+}
+
 template<typename T>
 void writeGenericWireType(GenericWireType*& cursor, T* wt) {
   cursor->w[0].p = wt;
@@ -228,6 +234,7 @@ inline void writeGenericWireType(GenericWireType*& cursor, const memory_view<Ele
 
 template<typename T>
 void writeGenericWireType(GenericWireType*& cursor, T wt) {
+  static_assert(sizeof(T) <= sizeof(cursor->w[0].u), "Generic wire type must be smaller than unsigned.");
   cursor->w[0].u = static_cast<unsigned>(wt);
   ++cursor;
 }
@@ -287,7 +294,7 @@ public:
       val view{ typed_memory_view(std::distance(begin, end), std::to_address(begin)) };
       return val(internal::_emval_new_array_from_memory_view(view.as_handle()));
     }
-    // For numeric arrays, following codes are unreachable and the compiler
+    // For numeric arrays, the following code is unreachable and the compiler
     // will do 'dead code elimination'.
     // Others fallback old way.
 #endif
@@ -345,7 +352,7 @@ public:
   explicit val(T&& value, Policies...) {
     using namespace internal;
 
-    new (this) val(internalCall<EM_INVOKER_KIND::CAST, WithPolicies<Policies...>, val>(nullptr, nullptr, std::forward<T>(value)));
+    new (this) val(internalCallWithPolicy<EM_INVOKER_KIND::CAST, WithPolicies<Policies...>, val>(nullptr, nullptr, std::forward<T>(value)));
   }
 
   val() : val(EM_VAL(internal::_EMVAL_UNDEFINED)) {}
@@ -368,6 +375,11 @@ public:
     }
   }
 
+  // Add an explicit overload for `val&` as well.
+  // Without it, C++ will try to use the `T&&` constructor instead of the more
+  // efficient `val(const val&)` when trying to copy a `val` instance.
+  val(val& v) : val(static_cast<const val&>(v)) {}
+
   ~val() {
     if (uses_ref_count()) {
       internal::_emval_decref(as_handle());
@@ -376,7 +388,7 @@ public:
   }
 
   EM_VAL as_handle() const {
-#ifdef _REENTRANT
+#ifdef __EMSCRIPTEN_PTHREADS__
     assert(pthread_equal(thread, pthread_self()) && "val accessed from wrong thread");
 #endif
     return handle;
@@ -473,9 +485,9 @@ public:
     return val(internal::_emval_get_property(as_handle(), val_ref(key).as_handle()));
   }
 
-  template<typename K, typename V>
-  void set(const K& key, const V& value) {
-    internal::_emval_set_property(as_handle(), val_ref(key).as_handle(), val_ref(value).as_handle());
+  template<typename K, typename V, typename... Policies>
+  void set(const K& key, const V& value, Policies... policies) {
+    internal::_emval_set_property(as_handle(), val_ref(key).as_handle(), val_ref(value, policies...).as_handle());
   }
 
   template<typename T>
@@ -487,28 +499,28 @@ public:
   val new_(Args&&... args) const {
     using namespace internal;
 
-    return internalCall<EM_INVOKER_KIND::CONSTRUCTOR, WithPolicies<>, val>(as_handle(), nullptr, std::forward<Args>(args)...);
+    return internalCall<EM_INVOKER_KIND::CONSTRUCTOR, val>(as_handle(), nullptr, std::forward<Args>(args)...);
   }
 
   template<typename... Args>
   val operator()(Args&&... args) const {
     using namespace internal;
 
-    return internalCall<EM_INVOKER_KIND::FUNCTION, WithPolicies<>, val>(as_handle(), nullptr, std::forward<Args>(args)...);
+    return internalCall<EM_INVOKER_KIND::FUNCTION, val>(as_handle(), nullptr, std::forward<Args>(args)...);
   }
 
   template<typename ReturnValue, typename... Args>
   ReturnValue call(const char* name, Args&&... args) const {
     using namespace internal;
 
-    return internalCall<EM_INVOKER_KIND::METHOD, WithPolicies<>, ReturnValue>(as_handle(), name, std::forward<Args>(args)...);
+    return internalCall<EM_INVOKER_KIND::METHOD, ReturnValue>(as_handle(), name, std::forward<Args>(args)...);
   }
 
   template<typename T, typename ...Policies>
   T as(Policies...) const {
     using namespace internal;
 
-    return internalCall<EM_INVOKER_KIND::CAST, WithPolicies<Policies...>, T>(as_handle(), nullptr, *this);
+    return internalCallWithPolicy<EM_INVOKER_KIND::CAST, WithPolicies<Policies...>, T>(as_handle(), nullptr, *this);
   }
 
 // Prefer calling val::typeOf() over val::typeof(), since this form works in both C++11 and GNU++11 build modes. "typeof" is a reserved word in GNU++11 extensions.
@@ -555,9 +567,11 @@ public:
 
 private:
   // takes ownership, assumes handle already incref'd and lives on the same thread
-  explicit val(EM_VAL handle)
-      : handle(handle), thread(pthread_self())
-  {}
+  explicit val(EM_VAL handle) :
+#ifdef __EMSCRIPTEN_PTHREADS__
+    thread(pthread_self()),
+#endif
+    handle(handle) {}
 
   // Whether this value is a uses incref/decref (true) or is a special reserved
   // value (false).
@@ -568,14 +582,24 @@ private:
   template<typename WrapperType>
   friend val internal::wrapped_extend(const std::string& , const val& );
 
-  template<internal::EM_INVOKER_KIND Kind, typename Policy, typename Ret, typename... Args>
+  template<internal::EM_INVOKER_KIND Kind, typename Ret, typename... Args>
   static Ret internalCall(EM_VAL handle, const char *methodName, Args&&... args) {
-    static_assert(!std::is_lvalue_reference<Ret>::value,
-                  "Cannot create a lvalue reference out of a JS value.");
+    using namespace internal;
+    using Policy = WithPolicies<FilterTypes<isPolicy, Args...>>;
+    auto filteredArgs = Filter<isNotPolicy>(args...);
+    return std::apply(
+        [&](auto&&... actualArgs) -> decltype(auto) {
+          return internalCallWithPolicy<Kind, Policy, Ret>(handle, methodName, std::forward<decltype(actualArgs)>(actualArgs)...);
+        },
+        filteredArgs
+    );
+  }
 
+  template<internal::EM_INVOKER_KIND Kind, typename Policy, typename Ret, typename... Args>
+  static Ret internalCallWithPolicy(EM_VAL handle, const char *methodName, Args&&... args) {
     using namespace internal;
 
-    using RetWire = BindingType<Ret>::WireType;
+    using RetWire = typename BindingType<Ret>::WireType;
 
     static constexpr typename Policy::template ArgTypeList<Ret, Args...> argTypes;
     thread_local EM_INVOKER mc = _emval_create_invoker(argTypes.getCount(), argTypes.getTypes(), Kind);
@@ -604,9 +628,9 @@ private:
     return BindingType<Ret>::fromWireType(result);
   }
 
-  template<typename T>
-  val val_ref(const T& v) const {
-    return val(v);
+  template<typename T, typename... Policies>
+  val val_ref(const T& v, Policies... policies) const {
+    return val(v, policies...);
   }
 
   const val& val_ref(const val& v) const {
@@ -647,40 +671,63 @@ inline val::iterator val::begin() const {
 // of the type of the parent coroutine).
 // This one is used for Promises represented by the `val` type.
 class val::awaiter {
-  // State machine holding awaiter's current state. One of:
-  //  - initially created with promise
-  //  - waiting with a given coroutine handle
-  //  - completed with a result
-  std::variant<val, std::coroutine_handle<val::promise_type>, val> state;
+  struct state_promise { val promise; };
+  struct state_coro {
+    std::coroutine_handle<> handle;
+    // Is std::coroutine_handle<val::promise_type>?
+    // In other words, are we also enclosed by a JS Promise?
+    bool is_val_promise = false;
+  };
+  struct state_result { val result; };
+  struct state_error { val error; };
 
-  constexpr static std::size_t STATE_PROMISE = 0;
-  constexpr static std::size_t STATE_CORO = 1;
-  constexpr static std::size_t STATE_RESULT = 2;
+  // State machine holding awaiter's current state. One of:
+  std::variant<
+    state_promise, // Initially created with the JS Promise we're awaiting
+    state_coro, // Waiting with a given coroutine handle
+    state_result, // Resolved with result
+    state_error // Rejected with error
+  > state;
+
+  void await_suspend_impl(state_coro coro) {
+    // Use get_if instead of get because we want it to work with exceptions disabled.
+    auto* promise_ptr = std::get_if<state_promise>(&state);
+    assert(promise_ptr && "Invalid awaiter state: expected JS Promise. An awaiter cannot be awaited multiple times.");
+    internal::_emval_coro_suspend(promise_ptr->promise.as_handle(), this);
+    state.emplace<state_coro>(coro);
+  }
 
 public:
-  awaiter(const val& promise)
-    : state(std::in_place_index<STATE_PROMISE>, promise) {}
+  awaiter(val promise)
+    : state(std::in_place_type<state_promise>, std::move(promise)) {}
 
   // just in case, ensure nobody moves / copies this type around
-  awaiter(awaiter&&) = delete;
+  awaiter(const awaiter&) = delete;
+  awaiter& operator=(const awaiter&) = delete;
 
   // Promises don't have a synchronously accessible "ready" state.
-  bool await_ready() { return false; }
+  bool await_ready() const { return false; }
 
   // On suspend, store the coroutine handle and invoke a helper that will do
   // a rough equivalent of
   // `promise.then(value => this.resume_with(value)).catch(error => this.reject_with(error))`.
+
   void await_suspend(std::coroutine_handle<val::promise_type> handle) {
-    internal::_emval_coro_suspend(std::get<STATE_PROMISE>(state).as_handle(), this);
-    state.emplace<STATE_CORO>(handle);
+    await_suspend_impl({handle, true});
+  }
+
+  void await_suspend(std::coroutine_handle<> handle) {
+    await_suspend_impl({handle, false});
   }
 
   // When JS invokes `resume_with` with some value, store that value and resume
   // the coroutine.
   void resume_with(val&& result) {
-    auto coro = std::move(std::get<STATE_CORO>(state));
-    state.emplace<STATE_RESULT>(std::move(result));
-    coro.resume();
+    auto* coro_ptr = std::get_if<state_coro>(&state);
+    assert(coro_ptr && "Invalid awaiter state: expected suspended coroutine handle.");
+    auto coro = *coro_ptr;
+    state.emplace<state_result>(std::move(result));
+    coro.handle.resume();
   }
 
   // When JS invokes `reject_with` with some error value, reject currently suspended
@@ -691,7 +738,13 @@ public:
   // `await_resume` finalizes the awaiter and should return the result
   // of the `co_await ...` expression - in our case, the stored value.
   val await_resume() {
-    return std::move(std::get<STATE_RESULT>(state));
+    if (auto* result = std::get_if<state_result>(&state)) {
+      return std::move(result->result);
+    }
+    // If a JS exception ended up here, it will be uncaught as C++ code cannot catch it
+    auto* error_ptr = std::get_if<state_error>(&state);
+    assert(error_ptr && "Invalid awaiter state: expected result or error.");
+    error_ptr->error.throw_();
   }
 };
 
@@ -726,6 +779,7 @@ public:
   // On an unhandled exception, reject the stored promise instead of throwing
   // it asynchronously where it can't be handled.
   void unhandled_exception() {
+#ifdef __cpp_exceptions
     try {
       std::rethrow_exception(std::current_exception());
     } catch (const val& error) {
@@ -734,6 +788,9 @@ public:
       val error = val(internal::_emval_from_current_cxa_exception());
       reject(error);
     }
+#else
+    std::terminate();
+#endif
   }
 
   // Reject the stored promise due to rejection deeper in the call chain
@@ -749,10 +806,23 @@ public:
 };
 
 inline void val::awaiter::reject_with(val&& error) {
-  auto coro = std::move(std::get<STATE_CORO>(state));
-  auto& promise = coro.promise();
-  promise.reject_with(std::move(error));
-  coro.destroy();
+  auto* coro_ptr = std::get_if<state_coro>(&state);
+  assert(coro_ptr && "Invalid awaiter state: expected suspended coroutine handle.");
+  auto coro = *coro_ptr;
+
+  if (coro.is_val_promise) {
+    if (!internal::_emval_is_catchable_cpp_exception_object(error.as_handle())) {
+      // C++ code cannot catch JS exceptions.
+      // Thus, we can just reject an enclosing JS Promise.
+      auto& promise = std::coroutine_handle<promise_type>::from_address(coro.handle.address()).promise();
+      promise.reject_with(std::move(error));
+      coro.handle.destroy();
+      return;
+    }
+  }
+
+  state.emplace<state_error>(std::move(error));
+  coro.handle.resume();
 }
 
 #endif
@@ -772,13 +842,13 @@ struct BindingType<T, typename std::enable_if<std::is_base_of<val, T>::value &&
                                               !std::is_const<T>::value>::type> {
   typedef EM_VAL WireType;
 
-  // Marshall to JS with move semantics when we can invalidate the temporary val
+  // Marshal to JS with move semantics when we can invalidate the temporary val
   // object.
   static WireType toWireType(val&& v, rvp::default_tag) {
     return v.release_ownership();
   }
 
-  // Marshal to JS with copy semantics when we cannot transfer the val objects
+  // Marshal to JS with copy semantics when we cannot transfer the val object's
   // reference count.
   static WireType toWireType(const val& v, rvp::default_tag) {
     EM_VAL handle = v.as_handle();
@@ -790,6 +860,29 @@ struct BindingType<T, typename std::enable_if<std::is_base_of<val, T>::value &&
   static T fromWireType(WireType v) {
     return T(val::take_ownership(v));
   }
+};
+
+template <typename T>
+struct BindingType<std::optional<T>> {
+    using ValBinding = BindingType<val>;
+    using WireType = ValBinding::WireType;
+
+    template<typename ReturnPolicy = void>
+    static WireType toWireType(std::optional<T> value, rvp::default_tag) {
+        if (value) {
+            return ValBinding::toWireType(val(*value, allow_raw_pointers()), rvp::default_tag{});
+        }
+        return ValBinding::toWireType(val::undefined(), rvp::default_tag{});
+    }
+
+
+    static std::optional<T> fromWireType(WireType value) {
+        val optional = val::take_ownership(value);
+        if (optional.isUndefined()) {
+            return {};
+        }
+        return optional.as<T>();
+    }
 };
 
 }
@@ -819,7 +912,7 @@ std::vector<T> convertJSArrayToNumberVector(const val& v) {
   // See https://www.ecma-international.org/ecma-262/6.0/#sec-%typedarray%.prototype.set-array-offset
   // and https://www.ecma-international.org/ecma-262/6.0/#sec-tonumber
   val memoryView{ typed_memory_view(l, rv.data()) };
-  memoryView.call<void>("set", v);
+  internal::_emval_array_to_memory_view(memoryView.as_handle(), v.as_handle());
 
   return rv;
 }

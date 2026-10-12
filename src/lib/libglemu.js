@@ -10,7 +10,7 @@ assert(!FULL_ES3, 'cannot emulate both ES3 and legacy GL');
 
 {{{
   const copySigs = (func) => {
-    if (!RELOCATABLE) return '';
+    if (!MAIN_MODULE) return '';
     return ` _${func}.sig = _emscripten_${func}.sig = orig_${func}.sig;`;
   };
   const fromPtr = (arg) => {
@@ -34,43 +34,42 @@ var LibraryGLEmulation = {
     'glVertexAttribPointer', 'glActiveTexture', '$stringToNewUTF8',
     '$ptrToString', '$getEmscriptenSupportedExtensions',
   ],
-  $GLEmulation__postset:
-#if MAYBE_CLOSURE_COMPILER
-    // Forward declare GL functions that are overridden by GLEmulation here to appease Closure compiler.
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glDrawArrays;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glDrawElements;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glActiveTexture;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glEnable;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glDisable;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glTexEnvf;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glTexEnvi;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glTexEnvfv;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glGetIntegerv;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glIsEnabled;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glGetBooleanv;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glGetString;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glCreateShader;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glShaderSource;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glCompileShader;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glAttachShader;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glDetachShader;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glUseProgram;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glDeleteProgram;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glBindAttribLocation;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glLinkProgram;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glBindBuffer;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glGetFloatv;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glHint;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glEnableVertexAttribArray;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glDisableVertexAttribArray;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _emscripten_glVertexAttribPointer;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _glTexEnvf;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _glTexEnvi;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _glTexEnvfv;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _glGetTexEnviv;' +
-    '/**@suppress {duplicate, undefinedVars}*/var _glGetTexEnvfv;' +
-#endif
-    'GLEmulation.init();',
+  $GLEmulation__force: true,
+  $GLEmulation__postset: `
+    // Forward declare GL functions that are overridden by GLEmulation.
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glDrawArrays;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glDrawElements;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glActiveTexture;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glEnable;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glDisable;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glTexEnvf;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glTexEnvi;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glTexEnvfv;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glGetIntegerv;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glIsEnabled;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glGetBooleanv;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glGetString;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glCreateShader;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glShaderSource;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glCompileShader;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glAttachShader;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glDetachShader;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glUseProgram;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glDeleteProgram;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glBindAttribLocation;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glLinkProgram;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glBindBuffer;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glGetFloatv;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glHint;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glEnableVertexAttribArray;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glDisableVertexAttribArray;
+    /**@suppress {duplicate, undefinedVars}*/var _emscripten_glVertexAttribPointer;
+    /**@suppress {duplicate, undefinedVars}*/var _glTexEnvf;
+    /**@suppress {duplicate, undefinedVars}*/var _glTexEnvi;
+    /**@suppress {duplicate, undefinedVars}*/var _glTexEnvfv;
+    /**@suppress {duplicate, undefinedVars}*/var _glGetTexEnviv;
+    /**@suppress {duplicate, undefinedVars}*/var _glGetTexEnvfv;
+    GLEmulation.init();`,
   $GLEmulation: {
     // Fog support. Partial, we assume shaders are used that implement fog. We just pass them uniforms
     fogStart: 0,
@@ -89,7 +88,6 @@ var LibraryGLEmulation = {
     lightingEnabled: false,
 
     lightModelAmbient: null,
-    lightModelLocalViewer: false,
     lightModelTwoSide: false,
 
     materialAmbient: null,
@@ -409,7 +407,7 @@ var LibraryGLEmulation = {
             return;
           }
           case 0x0D32: { // GL_MAX_CLIP_PLANES
-            {{{ makeSetValue('params', '0', 'GLEmulation.MAX_CLIP_PLANES', 'i32') }}}; // all implementations need to support atleast 6
+            {{{ makeSetValue('params', '0', 'GLEmulation.MAX_CLIP_PLANES', 'i32') }}}; // all implementations need to support at least 6
             return;
           }
           case 0x0BA0: { // GL_MATRIX_MODE
@@ -473,7 +471,7 @@ var LibraryGLEmulation = {
         {{{ fromPtr('length') }}}
         var source = GL.getSource(shader, count, string, length);
 #if GL_DEBUG
-        dbg("glShaderSource: Input: \n" + source);
+        dbg('glShaderSource: Input: \n' + source);
         GL.shaderOriginalSources[shader] = source;
 #endif
         // XXX We add attributes and uniforms to shaders. The program can ask for the # of them, and see the
@@ -577,7 +575,7 @@ var LibraryGLEmulation = {
         }
 #if GL_DEBUG
         GL.shaderSources[shader] = source;
-        dbg("glShaderSource: Output: \n" + source);
+        dbg('glShaderSource: Output: \n' + source);
 #endif
         GLctx.shaderSource(GL.shaders[shader], source);
       };
@@ -592,7 +590,7 @@ var LibraryGLEmulation = {
           dbg(`Info: ${JSON.stringify(GL.shaderInfos[shader])}`);
           dbg(`Original source: ${GL.shaderOriginalSources[shader]}`);
           dbg(`Source: ${GL.shaderSources[shader]}`);
-          throw 'Shader compilation halt';
+          abort('Shader compilation halt');
         }
 #endif
       };
@@ -626,10 +624,10 @@ var LibraryGLEmulation = {
         if (GL.debug) {
           dbg('[using program with shaders]');
           if (program) {
-            GL.programShaders[program].forEach((shader) => {
+            for (var shader of GL.programShaders[program]) {
               dbg(`  shader ${shader}, original source: ${GL.shaderOriginalSources[shader]}`);
               dbg(`         Source: ${GL.shaderSources[shader]}`);
-            });
+            }
           }
         }
 #endif
@@ -758,7 +756,7 @@ var LibraryGLEmulation = {
       switch (cap) {
         case 0xDE1: // GL_TEXTURE_2D - XXX not according to spec, and not in desktop GL, but works in some GLES1.x apparently, so support it
 #if ASSERTIONS
-          abort("GL_TEXTURE_2D is not a spec-defined capability for gl{Enable,Disable}ClientState.");
+          abort('GL_TEXTURE_2D is not a spec-defined capability for gl{Enable,Disable}ClientState.');
 #endif
           // Fall through:
         case 0x8078: // GL_TEXTURE_COORD_ARRAY
@@ -859,7 +857,7 @@ var LibraryGLEmulation = {
 #if !FULL_ES2
   $GLImmediate__postset: 'GLImmediate.setupFuncs(); Browser.moduleContextCreatedCallbacks.push(() => GLImmediate.init());',
 #endif
-  $GLImmediate__deps: ['$Browser', '$GL', '$GLEmulation'],
+  $GLImmediate__deps: ['$Browser', '$GL', '$GLEmulation', '$webglBufferSubData'],
   $GLImmediate: {
     MapTreeLib: null,
     spawnMapTreeLib: () => {
@@ -1060,12 +1058,12 @@ var LibraryGLEmulation = {
       var GL_RGBA = 0x1908;
 
       // Our defs:
-      var TEXENVJIT_NAMESPACE_PREFIX = "tej_";
+      var TEXENVJIT_NAMESPACE_PREFIX = 'tej_';
       // Not actually constant, as they can be changed between JIT passes:
-      var TEX_UNIT_UNIFORM_PREFIX = "uTexUnit";
-      var TEX_COORD_VARYING_PREFIX = "vTexCoord";
-      var PRIM_COLOR_VARYING = "vPrimColor";
-      var TEX_MATRIX_UNIFORM_PREFIX = "uTexMatrix";
+      var TEX_UNIT_UNIFORM_PREFIX = 'uTexUnit';
+      var TEX_COORD_VARYING_PREFIX = 'vTexCoord';
+      var PRIM_COLOR_VARYING = 'vPrimColor';
+      var TEX_MATRIX_UNIFORM_PREFIX = 'uTexMatrix';
 
       // Static vars:
       var s_texUnits = null; //[];
@@ -1074,16 +1072,12 @@ var LibraryGLEmulation = {
       var s_requiredTexUnitsForPass = [];
 
       // Static funcs:
-      function abort(info) {
-        assert(false, "[TexEnvJIT] ABORT: " + info);
-      }
-
       function abort_noSupport(info) {
-        abort("No support: " + info);
+        abort('[TexEnvJIT] ABORT: No support: ' + info);
       }
 
       function abort_sanity(info) {
-        abort("Sanity failure: " + info);
+        abort('[TexEnvJIT] ABORT: Sanity failure: ' + info);
       }
 
       function genTexUnitSampleExpr(texUnitID) {
@@ -1093,15 +1087,15 @@ var LibraryGLEmulation = {
         var func = null;
         switch (texType) {
           case GL_TEXTURE_1D:
-            func = "texture2D";
+            func = 'texture2D';
             break;
           case GL_TEXTURE_2D:
-            func = "texture2D";
+            func = 'texture2D';
             break;
           case GL_TEXTURE_3D:
-            return abort_noSupport("No support for 3D textures.");
+            return abort_noSupport('No support for 3D textures.');
           case GL_TEXTURE_CUBE_MAP:
-            func = "textureCube";
+            func = 'textureCube';
             break;
           default:
             return abort_sanity(`Unknown texType: ${ptrToString(texType)}`);
@@ -1118,13 +1112,13 @@ var LibraryGLEmulation = {
         switch (op) {
           case GL_SRC_COLOR:
           case GL_ONE_MINUS_SRC_COLOR:
-            return "vec3";
+            return 'vec3';
           case GL_SRC_ALPHA:
           case GL_ONE_MINUS_SRC_ALPHA:
-            return "float";
+            return 'float';
         }
 
-        return abort_noSupport("Unsupported combiner op: " + ptrToString(op));
+        return abort_noSupport('Unsupported combiner op: ' + ptrToString(op));
       }
 
       function getCurTexUnit() {
@@ -1149,25 +1143,25 @@ var LibraryGLEmulation = {
             srcExpr = previousVar;
             break;
           default:
-              return abort_noSupport("Unsupported combiner src: " + ptrToString(src));
+              return abort_noSupport('Unsupported combiner src: ' + ptrToString(src));
         }
 
         var expr = null;
         switch (op) {
           case GL_SRC_COLOR:
-            expr = srcExpr + ".rgb";
+            expr = srcExpr + '.rgb';
             break;
           case GL_ONE_MINUS_SRC_COLOR:
-            expr = "(vec3(1.0) - " + srcExpr + ".rgb)";
+            expr = `(vec3(1.0) - ${srcExpr}.rgb)`;
             break;
           case GL_SRC_ALPHA:
-            expr = srcExpr + ".a";
+            expr = srcExpr + '.a';
             break;
           case GL_ONE_MINUS_SRC_ALPHA:
-            expr = "(1.0 - " + srcExpr + ".a)";
+            expr = `(1.0 - ${srcExpr}.a)`;
             break;
           default:
-            return abort_noSupport("Unsupported combiner op: " + ptrToString(op));
+            return abort_noSupport('Unsupported combiner op: ' + ptrToString(op));
         }
 
         return expr;
@@ -1315,7 +1309,7 @@ var LibraryGLEmulation = {
 
       CTexUnit.prototype.genPassLines = function CTexUnit_genPassLines(passOutputVar, passInputVar, texUnitID) {
         if (!this.enabled()) {
-          return ["vec4 " + passOutputVar + " = " + passInputVar + ";"];
+          return [`vec4 ${passOutputVar} = ${passInputVar};`];
         }
         var lines = this.env.genPassLines(passOutputVar, passInputVar, texUnitID).join('\n');
 
@@ -1330,9 +1324,9 @@ var LibraryGLEmulation = {
           var secondOccurrence = lines.slice(load.index+1).indexOf(texLoadExpr);
           if (secondOccurrence != -1) { // And also has a second occurrence of same load expression..
             // Create new var to store the common load.
-            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + "_";
-            var texLoadVar = prefix + 'texload' + loadCounter++;
-            var texLoadLine = 'vec4 ' + texLoadVar + ' = ' + texLoadExpr + ';\n';
+            var prefix = `${TEXENVJIT_NAMESPACE_PREFIX}env${texUnitID}_`;
+            var texLoadVar = `${prefix}texload${loadCounter++}`;
+            var texLoadLine = `vec4 ${texLoadVar} = ${texLoadExpr};\n`;
             texLoadLines += texLoadLine + '\n'; // Store the generated texture load statements in a temp string to not confuse regex search in progress.
             lines = lines.split(texLoadExpr).join(texLoadVar);
             // Reset regex search, since we modified the string.
@@ -1369,7 +1363,7 @@ var LibraryGLEmulation = {
              * Av = As
              */
             return [
-              "vec4 " + passOutputVar + " = " + genTexUnitSampleExpr(texUnitID) + ";",
+              `vec4 ${passOutputVar} = ${genTexUnitSampleExpr(texUnitID)};`,
             ];
           }
           case GL_ADD: {
@@ -1377,16 +1371,16 @@ var LibraryGLEmulation = {
              * Cv = Cp + Cs
              * Av = ApAs
              */
-            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + "_";
-            var texVar = prefix + "tex";
-            var colorVar = prefix + "color";
-            var alphaVar = prefix + "alpha";
+            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + '_';
+            var texVar = prefix + 'tex';
+            var colorVar = prefix + 'color';
+            var alphaVar = prefix + 'alpha';
 
             return [
-              "vec4 " + texVar + " = " + genTexUnitSampleExpr(texUnitID) + ";",
-              "vec3 " + colorVar + " = " + passInputVar + ".rgb + " + texVar + ".rgb;",
-              "float " + alphaVar + " = " + passInputVar + ".a * " + texVar + ".a;",
-              "vec4 " + passOutputVar + " = vec4(" + colorVar + ", " + alphaVar + ");",
+              'vec4 ' + texVar + ' = ' + genTexUnitSampleExpr(texUnitID) + ';',
+              'vec3 ' + colorVar + ' = ' + passInputVar + '.rgb + ' + texVar + '.rgb;',
+              'float ' + alphaVar + ' = ' + passInputVar + '.a * ' + texVar + '.a;',
+              'vec4 ' + passOutputVar + ' = vec4(' + colorVar + ', ' + alphaVar + ');',
             ];
           }
           case GL_MODULATE: {
@@ -1395,36 +1389,36 @@ var LibraryGLEmulation = {
              * Av = ApAs
              */
             var line = [
-              "vec4 " + passOutputVar,
-              " = ",
+              'vec4 ' + passOutputVar,
+              ' = ',
                 passInputVar,
-                " * ",
+                ' * ',
                 genTexUnitSampleExpr(texUnitID),
-              ";",
+              ';',
             ];
-            return [line.join("")];
+            return [line.join('')];
           }
           case GL_DECAL: {
             /* RGBA:
              * Cv = Cp(1 - As) + CsAs
              * Av = Ap
              */
-            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + "_";
-            var texVar = prefix + "tex";
-            var colorVar = prefix + "color";
-            var alphaVar = prefix + "alpha";
+            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + '_';
+            var texVar = prefix + 'tex';
+            var colorVar = prefix + 'color';
+            var alphaVar = prefix + 'alpha';
 
             return [
-              "vec4 " + texVar + " = " + genTexUnitSampleExpr(texUnitID) + ";",
+              'vec4 ' + texVar + ' = ' + genTexUnitSampleExpr(texUnitID) + ';',
               [
-                "vec3 " + colorVar + " = ",
-                  passInputVar + ".rgb * (1.0 - " + texVar + ".a)",
-                    " + ",
-                  texVar + ".rgb * " + texVar + ".a",
-                ";"
-              ].join(""),
-              "float " + alphaVar + " = " + passInputVar + ".a;",
-              "vec4 " + passOutputVar + " = vec4(" + colorVar + ", " + alphaVar + ");",
+                'vec3 ' + colorVar + ' = ',
+                  passInputVar + '.rgb * (1.0 - ' + texVar + '.a)',
+                    ' + ',
+                  texVar + '.rgb * ' + texVar + '.a',
+                ';'
+              ].join(''),
+              'float ' + alphaVar + ' = ' + passInputVar + '.a;',
+              'vec4 ' + passOutputVar + ' = vec4(' + colorVar + ', ' + alphaVar + ');',
             ];
           }
           case GL_BLEND: {
@@ -1432,28 +1426,28 @@ var LibraryGLEmulation = {
              * Cv = Cp(1 - Cs) + CcCs
              * Av = As
              */
-            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + "_";
-            var texVar = prefix + "tex";
-            var colorVar = prefix + "color";
-            var alphaVar = prefix + "alpha";
+            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + '_';
+            var texVar = prefix + 'tex';
+            var colorVar = prefix + 'color';
+            var alphaVar = prefix + 'alpha';
 
             return [
-              "vec4 " + texVar + " = " + genTexUnitSampleExpr(texUnitID) + ";",
+              'vec4 ' + texVar + ' = ' + genTexUnitSampleExpr(texUnitID) + ';',
               [
-                "vec3 " + colorVar + " = ",
-                  passInputVar + ".rgb * (1.0 - " + texVar + ".rgb)",
-                    " + ",
-                  PRIM_COLOR_VARYING + ".rgb * " + texVar + ".rgb",
-                ";"
-              ].join(""),
-              "float " + alphaVar + " = " + texVar + ".a;",
-              "vec4 " + passOutputVar + " = vec4(" + colorVar + ", " + alphaVar + ");",
+                'vec3 ' + colorVar + ' = ',
+                  passInputVar + '.rgb * (1.0 - ' + texVar + '.rgb)',
+                    ' + ',
+                  PRIM_COLOR_VARYING + '.rgb * ' + texVar + '.rgb',
+                ';'
+              ].join(''),
+              'float ' + alphaVar + ' = ' + texVar + '.a;',
+              'vec4 ' + passOutputVar + ' = vec4(' + colorVar + ', ' + alphaVar + ');',
             ];
           }
           case GL_COMBINE: {
-            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + "_";
-            var colorVar = prefix + "color";
-            var alphaVar = prefix + "alpha";
+            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + texUnitID + '_';
+            var colorVar = prefix + 'color';
+            var alphaVar = prefix + 'alpha';
             var colorLines = this.genCombinerLines(true, colorVar,
                                                    passInputVar, texUnitID,
                                                    this.colorCombiner, this.colorSrc, this.colorOp);
@@ -1462,24 +1456,24 @@ var LibraryGLEmulation = {
                                                    this.alphaCombiner, this.alphaSrc, this.alphaOp);
 
             // Generate scale, but avoid generating an identity op that multiplies by one.
-            var scaledColor = (this.colorScale == 1) ? colorVar : (colorVar + " * " + valToFloatLiteral(this.colorScale));
-            var scaledAlpha = (this.alphaScale == 1) ? alphaVar : (alphaVar + " * " + valToFloatLiteral(this.alphaScale));
+            var scaledColor = (this.colorScale == 1) ? colorVar : (colorVar + ' * ' + valToFloatLiteral(this.colorScale));
+            var scaledAlpha = (this.alphaScale == 1) ? alphaVar : (alphaVar + ' * ' + valToFloatLiteral(this.alphaScale));
 
             var line = [
-              "vec4 " + passOutputVar,
-              " = ",
-                "vec4(",
+              'vec4 ' + passOutputVar,
+              ' = ',
+                'vec4(',
                     scaledColor,
-                    ", ",
+                    ', ',
                     scaledAlpha,
-                ")",
-              ";",
-            ].join("");
+                ')',
+              ';',
+            ].join('');
             return [].concat(colorLines, alphaLines, [line]);
           }
         }
 
-        return abort_noSupport("Unsupported TexEnv mode: " + ptrToString(this.mode));
+        return abort_noSupport('Unsupported TexEnv mode: ' + ptrToString(this.mode));
       }
 
       CTexEnv.prototype.genCombinerLines = function CTexEnv_getCombinerLines(isColor, outputVar,
@@ -1503,20 +1497,20 @@ var LibraryGLEmulation = {
             break;
 
           default:
-            return abort_noSupport("Unsupported combiner: " + ptrToString(combiner));
+            return abort_noSupport('Unsupported combiner: ' + ptrToString(combiner));
         }
 
         var constantExpr = [
-          "vec4(",
+          'vec4(',
             valToFloatLiteral(this.envColor[0]),
-            ", ",
+            ', ',
             valToFloatLiteral(this.envColor[1]),
-            ", ",
+            ', ',
             valToFloatLiteral(this.envColor[2]),
-            ", ",
+            ', ',
             valToFloatLiteral(this.envColor[3]),
-          ")",
-        ].join("");
+          ')',
+        ].join('');
         var src0Expr = (argsNeeded >= 1) ? genCombinerSourceExpr(texUnitID, constantExpr, passInputVar, srcArr[0], opArr[0])
                                          : null;
         var src1Expr = (argsNeeded >= 2) ? genCombinerSourceExpr(texUnitID, constantExpr, passInputVar, srcArr[1], opArr[1])
@@ -1524,7 +1518,7 @@ var LibraryGLEmulation = {
         var src2Expr = (argsNeeded >= 3) ? genCombinerSourceExpr(texUnitID, constantExpr, passInputVar, srcArr[2], opArr[2])
                                          : null;
 
-        var outputType = isColor ? "vec3" : "float";
+        var outputType = isColor ? 'vec3' : 'float';
         var lines = null;
         switch (combiner) {
           case GL_REPLACE: {
@@ -1556,7 +1550,7 @@ var LibraryGLEmulation = {
           }
 
           default:
-            return abort_sanity("Unmatched TexEnv.colorCombiner?");
+            return abort_sanity('Unmatched TexEnv.colorCombiner?');
         }
 
         return lines;
@@ -1596,20 +1590,20 @@ var LibraryGLEmulation = {
 
             s_requiredTexUnitsForPass.push(i);
 
-            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + i + "_";
-            var passOutputVar = prefix + "result";
+            var prefix = TEXENVJIT_NAMESPACE_PREFIX + 'env' + i + '_';
+            var passOutputVar = prefix + 'result';
 
             var newLines = s_texUnits[i].genPassLines(passOutputVar, lastPassVar, i);
-            lines = lines.concat(newLines, [""]);
+            lines = lines.concat(newLines, ['']);
 
             lastPassVar = passOutputVar;
           }
-          lines.push(resultDest + " = " + lastPassVar + ";");
+          lines.push(resultDest + ' = ' + lastPassVar + ';');
 
-          var indent = "";
-          for (var i = 0; i < indentSize; i++) indent += " ";
+          var indent = '';
+          for (var i = 0; i < indentSize; i++) indent += ' ';
 
-          var output = indent + lines.join("\n" + indent);
+          var output = indent + lines.join('\n' + indent);
 
           return output;
         },
@@ -1981,7 +1975,6 @@ var LibraryGLEmulation = {
     vertexData: null, // current vertex data. either tempData (glBegin etc.) or a view into the heap (gl*Pointer). Default view is F32
     vertexDataU8: null, // U8 view
     tempData: null,
-    indexData: null,
     vertexCounter: 0,
     mode: -1,
 
@@ -1997,7 +1990,6 @@ var LibraryGLEmulation = {
     matrix: [],
     matrixStack: [],
     currentMatrix: 0, // 0: modelview, 1: projection, 2+i, texture matrix i.
-    tempMatrix: null,
     matricesModified: false,
     useTextureMatrix: false,
 
@@ -2050,7 +2042,7 @@ var LibraryGLEmulation = {
         GLImmediate.rendererComponents[name] = 1;
 #if ASSERTIONS
         if (GLImmediate.enabledClientAttributes[name]) {
-          warnOnce("Warning: glTexCoord used after EnableClientState for TEXTURE_COORD_ARRAY for TEXTURE0. Disabling TEXTURE_COORD_ARRAY...");
+          warnOnce('Warning: glTexCoord used after EnableClientState for TEXTURE_COORD_ARRAY for TEXTURE0. Disabling TEXTURE_COORD_ARRAY...');
         }
 #endif
         GLImmediate.enabledClientAttributes[name] = true;
@@ -2167,7 +2159,7 @@ var LibraryGLEmulation = {
 #if ASSERTIONS
         if (!useCurrProgram) {
           if (GLImmediate.TexEnvJIT.getTexUnitType(i) == 0) {
-             warnOnce("GL_TEXTURE" + i + " coords are supplied, but that texture unit is disabled in the fixed-function pipeline.");
+             warnOnce('GL_TEXTURE' + i + ' coords are supplied, but that texture unit is disabled in the fixed-function pipeline.');
           }
         }
 #endif
@@ -2347,7 +2339,7 @@ var LibraryGLEmulation = {
                 '  return fog;                 ',
                 '}',
                 '',
-              ].join("\n");
+              ].join('\n');
             }
 
             var fogPass = null;
@@ -2403,7 +2395,7 @@ var LibraryGLEmulation = {
               fsAlphaTestPass,
               '}',
               ''
-            ].join("\n").replace(/\n\n+/g, '\n');
+            ].join('\n').replace(/\n\n+/g, '\n');
 
             this.fragmentShader = GLctx.createShader(GLctx.FRAGMENT_SHADER);
             GLctx.shaderSource(this.fragmentShader, fsSource);
@@ -2480,7 +2472,7 @@ var LibraryGLEmulation = {
           this.hasNormal = GLImmediate.enabledClientAttributes[GLImmediate.NORMAL] &&
                            GLImmediate.clientAttributes[GLImmediate.NORMAL].size > 0 &&
                            this.normalLocation >= 0;
-          this.hasColor = (this.colorLocation === 0) || this.colorLocation > 0;
+          this.hasColor = this.colorLocation >= 0;
 
           this.floatType = GLctx.FLOAT; // minor optimization
 
@@ -2558,7 +2550,7 @@ var LibraryGLEmulation = {
               GLImmediate.lastArrayBuffer = arrayBuffer;
             }
 
-            GLctx.bufferSubData(GLctx.ARRAY_BUFFER, start, GLImmediate.vertexData.subarray(start >> 2, end >> 2));
+            webglBufferSubData(GLctx.ARRAY_BUFFER, start, (end - start) >> 2, start >> 2, GLImmediate.vertexData);
           }
 #if GL_UNSAFE_OPTS
           if (canSkip) return;
@@ -2789,7 +2781,7 @@ var LibraryGLEmulation = {
         glDisable(cap);
       };
 
-      var glTexEnvf = (typeof _glTexEnvf != 'undefined') ? _glTexEnvf : () => {};
+      var glTexEnvf = (typeof _glTexEnvf !== 'undefined') ? _glTexEnvf : () => {};
       /** @suppress {checkTypes} */
       _glTexEnvf = _emscripten_glTexEnvf = (target, pname, param) => {
         GLImmediate.TexEnvJIT.hook_texEnvf(target, pname, param);
@@ -2797,7 +2789,7 @@ var LibraryGLEmulation = {
         //glTexEnvf(target, pname, param);
       };
 
-      var glTexEnvi = (typeof _glTexEnvi != 'undefined') ? _glTexEnvi : () => {};
+      var glTexEnvi = (typeof _glTexEnvi !== 'undefined') ? _glTexEnvi : () => {};
       /** @suppress {checkTypes} */
       _glTexEnvi = _emscripten_glTexEnvi = (target, pname, param) => {
         {{{ fromPtr('param') }}}
@@ -2806,7 +2798,7 @@ var LibraryGLEmulation = {
         //glTexEnvi(target, pname, param);
       };
 
-      var glTexEnvfv = (typeof _glTexEnvfv != 'undefined') ? _glTexEnvfv : () => {};
+      var glTexEnvfv = (typeof _glTexEnvfv !== 'undefined') ? _glTexEnvfv : () => {};
       /** @suppress {checkTypes} */
       _glTexEnvfv = _emscripten_glTexEnvfv = (target, pname, param) => {
         {{{ fromPtr('param') }}}
@@ -2844,17 +2836,16 @@ var LibraryGLEmulation = {
     },
 
     // Main functions
-    initted: false,
     init() {
       err('WARNING: using emscripten GL immediate mode emulation. This is very limited in what it supports');
-      GLImmediate.initted = true;
 
       if (!Browser.useWebGL) return; // a 2D canvas may be currently used TODO: make sure we are actually called in that case
 
       // User can override the maximum number of texture units that we emulate. Using fewer texture units increases runtime performance
       // slightly, so it is advantageous to choose as small value as needed.
       // Limit to a maximum of 28 to not overflow the state bits used for renderer caching (31 bits = 3 attributes + 28 texture units).
-      GLImmediate.MAX_TEXTURES = Math.min(Module['GL_MAX_TEXTURE_IMAGE_UNITS'] || GLctx.getParameter(GLctx.MAX_TEXTURE_IMAGE_UNITS), 28);
+      var maxTextureUnits = {{{ makeModuleReceiveExpr('GL_MAX_TEXTURE_IMAGE_UNITS', 'GLctx.getParameter(GLctx.MAX_TEXTURE_IMAGE_UNITS)') }}};
+      GLImmediate.MAX_TEXTURES = Math.min(maxTextureUnits, 28);
 
       GLImmediate.TexEnvJIT.init(GLctx, GLImmediate.MAX_TEXTURES);
 
@@ -2884,7 +2875,6 @@ var LibraryGLEmulation = {
 
       // Buffers for data
       GLImmediate.tempData = new Float32Array(GL.MAX_TEMP_BUFFER_SIZE >> 2);
-      GLImmediate.indexData = new Uint16Array(GL.MAX_TEMP_BUFFER_SIZE >> 1);
 
       GLImmediate.vertexDataU8 = new Uint8Array(GLImmediate.tempData.buffer);
 
@@ -3029,7 +3019,7 @@ var LibraryGLEmulation = {
       var numVertices = 4 * GLImmediate.vertexCounter / GLImmediate.stride;
       if (!numVertices) return;
 #if ASSERTIONS
-      assert(numVertices % 1 == 0, "`numVertices` must be an integer.");
+      assert(numVertices % 1 == 0, '`numVertices` must be an integer.');
 #endif
       var emulatedElementArrayBuffer = false;
       var numIndexes = 0;
@@ -3042,7 +3032,7 @@ var LibraryGLEmulation = {
           // upload based on the indices. If they are in a buffer on the GPU, that is very
           // inconvenient! So if you do not have an array buffer, you should also not have
           // an element array buffer. But best is to use both buffers!
-          assert(!GLctx.currentElementArrayBufferBinding);
+          assert(!GLctx.currentElementArrayBufferBinding, 'must use array buffers when using element buffer');
 #endif
           for (var i = 0; i < numProvidedIndexes; i++) {
             var currIndex = {{{ makeGetValue('ptr', 'i*2', 'u16') }}};
@@ -3052,17 +3042,18 @@ var LibraryGLEmulation = {
         }
         if (!GLctx.currentElementArrayBufferBinding) {
           // If no element array buffer is bound, then indices is a literal pointer to clientside data
+          var byteSize = numProvidedIndexes << 1;
 #if ASSERTIONS
-          assert(numProvidedIndexes << 1 <= GL.MAX_TEMP_BUFFER_SIZE, 'too many immediate mode indexes (a)');
+          assert(byteSize <= GL.MAX_TEMP_BUFFER_SIZE, 'too many immediate mode indexes (a)');
 #endif
-          var indexBuffer = GL.getTempIndexBuffer(numProvidedIndexes << 1);
+          var indexBuffer = GL.getTempIndexBuffer(byteSize);
           GLctx.bindBuffer(GLctx.ELEMENT_ARRAY_BUFFER, indexBuffer);
-          GLctx.bufferSubData(GLctx.ELEMENT_ARRAY_BUFFER, 0, {{{ makeHEAPView('U16', 'ptr', 'ptr + (numProvidedIndexes << 1)') }}});
+          webglBufferSubData(GLctx.ELEMENT_ARRAY_BUFFER, 0, byteSize, ptr);
           ptr = 0;
           emulatedElementArrayBuffer = true;
         }
       } else if (GLImmediate.mode > 6) { // above GL_TRIANGLE_FAN are the non-GL ES modes
-        if (GLImmediate.mode != 7) throw 'unsupported immediate mode ' + GLImmediate.mode; // GL_QUADS
+        if (GLImmediate.mode != 7) abort('unsupported immediate mode ' + GLImmediate.mode); // GL_QUADS
         // GLImmediate.firstVertex is the first vertex we want. Quad indexes are
         // in the pattern 0 1 2, 0 2 3, 4 5 6, 4 6 7, so we need to look at
         // index firstVertex * 1.5 to see it.  Then since indexes are 2 bytes
@@ -3218,7 +3209,7 @@ var LibraryGLEmulation = {
   glTexCoord2fv: (v) =>
     _glTexCoord2i({{{ makeGetValue('v', '0', 'float') }}}, {{{ makeGetValue('v', '4', 'float') }}}),
 
-  glTexCoord4f: () => { throw 'glTexCoord4f: TODO' },
+  glTexCoord4f: () => { abort('glTexCoord4f: TODO') },
 
   glColor4f: (r, g, b, a) => {
     r = Math.max(Math.min(r, 1), 0);
@@ -3750,9 +3741,9 @@ var LibraryGLEmulation = {
   },
   glRotatef: 'glRotated',
 
-  glDrawBuffer: () => { throw 'glDrawBuffer: TODO' },
+  glDrawBuffer: () => { abort('glDrawBuffer: TODO') },
 #if MAX_WEBGL_VERSION < 2
-  glReadBuffer: () => { throw 'glReadBuffer: TODO' },
+  glReadBuffer: () => { abort('glReadBuffer: TODO') },
 #endif
 
   glClipPlane: (pname, param) => {
@@ -3800,7 +3791,7 @@ var LibraryGLEmulation = {
         // multiply position with current modelviewmatrix
         GLImmediate.matrixLib.mat4.multiplyVec4(GLImmediate.matrix[0], GLEmulation.lightPosition[lightId]);
       } else {
-        throw 'glLightfv: TODO: ' + pname;
+        abort('glLightfv: TODO: ' + pname);
       }
     }
   },
@@ -3809,7 +3800,7 @@ var LibraryGLEmulation = {
     if (pname == 0x0B52) { // GL_LIGHT_MODEL_TWO_SIDE
       GLEmulation.lightModelTwoSide = (param != 0) ? true : false;
     } else {
-      throw 'glLightModelf: TODO: ' + pname;
+      abort('glLightModelf: TODO: ' + pname);
     }
   },
 
@@ -3820,12 +3811,12 @@ var LibraryGLEmulation = {
       GLEmulation.lightModelAmbient[2] = {{{ makeGetValue('param', '8', 'float') }}};
       GLEmulation.lightModelAmbient[3] = {{{ makeGetValue('param', '12', 'float') }}};
     } else {
-      throw 'glLightModelfv: TODO: ' + pname;
+      abort('glLightModelfv: TODO: ' + pname);
     }
   },
 
   glMaterialfv: (face, pname, param) => {
-    if ((face != 0x0404) && (face != 0x0408)) { throw 'glMaterialfv: TODO' + face; } // only GL_FRONT and GL_FRONT_AND_BACK supported
+    if ((face != 0x0404) && (face != 0x0408)) { abort('glMaterialfv: TODO' + face); } // only GL_FRONT and GL_FRONT_AND_BACK supported
 
     if (pname == 0x1200) { // GL_AMBIENT
       GLEmulation.materialAmbient[0] = {{{ makeGetValue('param', '0', 'float') }}};
@@ -3845,22 +3836,22 @@ var LibraryGLEmulation = {
     } else if (pname == 0x1601) { // GL_SHININESS
       GLEmulation.materialShininess[0] = {{{ makeGetValue('param', '0', 'float') }}};
     } else {
-      throw 'glMaterialfv: TODO: ' + pname;
+      abort('glMaterialfv: TODO: ' + pname);
     }
   },
 
-  glTexGeni: (coord, pname, param) => { throw 'glTexGeni: TODO' },
-  glTexGenfv: (coord, pname, param) => { throw 'glTexGenfv: TODO' },
+  glTexGeni: (coord, pname, param) => abort('glTexGeni: TODO'),
+  glTexGenfv: (coord, pname, param) => abort('glTexGenfv: TODO'),
   glTexEnvi: (target, pname, params) => warnOnce('glTexEnvi: TODO'),
   glTexEnvf: (target, pname, params) => warnOnce('glTexEnvf: TODO'),
   glTexEnvfv: (target, pname, params) => warnOnce('glTexEnvfv: TODO'),
 
-  glGetTexEnviv: (target, pname, param) => { throw 'GL emulation not initialized!'; },
-  glGetTexEnvfv: (target, pname, param) => { throw 'GL emulation not initialized!'; },
+  glGetTexEnviv: (target, pname, param) => abort('GL emulation not initialized!'),
+  glGetTexEnvfv: (target, pname, param) => abort('GL emulation not initialized!'),
 
-  glTexImage1D: (target, level, internalformat, width, border, format, type, data) => { throw 'glTexImage1D: TODO' },
-  glTexCoord3f: (target, level, internalformat, width, border, format, type, data) => { throw 'glTexCoord3f: TODO' },
-  glGetTexLevelParameteriv: (target, level, pname, params) => { throw 'glGetTexLevelParameteriv: TODO' },
+  glTexImage1D: (target, level, internalformat, width, border, format, type, data) => abort('glTexImage1D: TODO'),
+  glTexCoord3f: (target, level, internalformat, width, border, format, type, data) => abort('glTexCoord3f: TODO'),
+  glGetTexLevelParameteriv: (target, level, pname, params) => abort('glGetTexLevelParameteriv: TODO'),
 
   glShadeModel: () => warnOnce('TODO: glShadeModel'),
 
@@ -3896,7 +3887,7 @@ var LibraryGLEmulation = {
   },
 
   gluProject: (objX, objY, objZ, model, proj, view, winX, winY, winZ) => {
-    // The algorithm for this functions comes from Mesa
+    // The algorithm for this function comes from Mesa
 
     var inVec = new Float32Array(4);
     var outVec = new Float32Array(4);
@@ -3945,8 +3936,6 @@ var LibraryGLEmulation = {
   gluOrtho2D__deps: ['glOrtho'],
   gluOrtho2D: (left, right, bottom, top) => _glOrtho(left, right, bottom, top, -1, 1),
 };
-
-extraLibraryFuncs.push('$GLEmulation');
 
 recordGLProcAddressGet(LibraryGLEmulation);
 

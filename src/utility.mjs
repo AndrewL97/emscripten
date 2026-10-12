@@ -20,7 +20,7 @@ export function safeQuote(x) {
 export function dump(item) {
   let funcData;
   try {
-    if (typeof item == 'object' && item != null && item.funcData) {
+    if (typeof item === 'object' && item != null && item.funcData) {
       funcData = item.funcData;
       item.funcData = null;
     }
@@ -28,7 +28,7 @@ export function dump(item) {
   } catch {
     const ret = [];
     for (const [i, j] of Object.entries(item)) {
-      if (typeof j == 'string' || typeof j == 'number') {
+      if (typeof j === 'string' || typeof j === 'number') {
         ret.push(`${i}: ${j}`);
       } else {
         ret.push(`${i}: [?]`);
@@ -88,6 +88,7 @@ export function errorOccured() {
 
 export function error(msg, lineNo) {
   abortExecution = true;
+  process.exitCode = 1;
   printErr(`error: ${errorPrefix(lineNo)}${msg}`);
 }
 
@@ -95,15 +96,15 @@ function range(size) {
   return Array.from(Array(size).keys());
 }
 
+export const extraLibraryFuncs = [];
+
 export function mergeInto(obj, other, options = null) {
   if (options) {
     // check for unintended symbol redefinition
     if (options.noOverride) {
       for (const key of Object.keys(other)) {
         if (obj.hasOwnProperty(key)) {
-          error(
-            `Symbol re-definition in JavaScript library: ${key}. Do not use noOverride if this is intended`,
-          );
+          error(`Symbol re-definition in JavaScript library: ${key}. Do not use noOverride if this is intended`);
           return;
         }
       }
@@ -147,23 +148,26 @@ export function mergeInto(obj, other, options = null) {
       }
 
       const index = key.lastIndexOf('__');
+      const decorated = key.slice(0, index);
       const decoratorName = key.slice(index);
       const type = typeof other[key];
+
+      if (decoratorName == '__async') {
+        if (isJsOnlySymbol(decorated)) {
+          error(`__async decorator applied to JS symbol: ${decorated}`);
+        }
+      }
 
       // Specific type checking for `__deps` which is expected to be an array
       // (not just any old `object`)
       if (decoratorName === '__deps') {
         const deps = other[key];
         if (!Array.isArray(deps)) {
-          error(
-            `JS library directive ${key}=${deps.toString()} is of type '${type}', but it should be an array`,
-          );
+          error(`JS library directive ${key}=${deps} is of type '${type}', but it should be an array`);
         }
-        for (let dep of deps) {
+        for (const dep of deps) {
           if (dep && typeof dep !== 'string' && typeof dep !== 'function') {
-            error(
-              `__deps entries must be of type 'string' or 'function' not '${typeof dep}': ${key}`,
-            );
+            error(`__deps entries must be of type 'string' or 'function' not '${typeof dep}': ${key}`);
           }
         }
       } else {
@@ -178,13 +182,19 @@ export function mergeInto(obj, other, options = null) {
           __noleakcheck: 'boolean',
           __internal: 'boolean',
           __user: 'boolean',
-          __async: 'boolean',
+          __async: ['string', 'boolean'],
           __i53abi: 'boolean',
+          __export: 'boolean',
+          __force: 'boolean',
         };
         const expected = decoratorTypes[decoratorName];
         if (type !== expected && !expected.includes(type)) {
-          error(`Decorator (${key}} has wrong type. Expected '${expected}' not '${type}'`);
+          error(`Decorator (${key}) has wrong type. Expected '${expected}' not '${type}'`);
         }
+      }
+
+      if (decoratorName === '__force' && other[key]) {
+        extraLibraryFuncs.push(decorated);
       }
     }
   }
@@ -198,22 +208,25 @@ export function isJsOnlySymbol(symbol) {
   return symbol[0] == '$';
 }
 
+export const decoratorSuffixes = [
+  '__sig',
+  '__proxy',
+  '__asm',
+  '__deps',
+  '__postset',
+  '__docs',
+  '__nothrow',
+  '__noleakcheck',
+  '__internal',
+  '__user',
+  '__async',
+  '__i53abi',
+  '__export',
+  '__force',
+];
+
 export function isDecorator(ident) {
-  const suffixes = [
-    '__sig',
-    '__proxy',
-    '__asm',
-    '__deps',
-    '__postset',
-    '__docs',
-    '__nothrow',
-    '__noleakcheck',
-    '__internal',
-    '__user',
-    '__async',
-    '__i53abi',
-  ];
-  return suffixes.some((suffix) => ident.endsWith(suffix));
+  return decoratorSuffixes.some((suffix) => ident.endsWith(suffix));
 }
 
 export function readFile(filename) {
@@ -241,42 +254,67 @@ function read(filename) {
   return readFile(filename);
 }
 
-export function printErr(x) {
-  process.stderr.write(x + '\n');
+export function printErr(...args) {
+  console.error(...args);
 }
 
-export class Benchmarker {
-  totals = {};
+export function debugLog(...args) {
+  if (VERBOSE) printErr(...args);
+}
+
+class Profiler {
   ids = [];
   lastTime = 0;
 
+  constructor() {
+    this.start('overall')
+    this.startTime = performance.now();
+  }
+
+  log(msg) {
+    const depth = this.ids.length;
+    const indent = ' '.repeat(depth)
+    printErr('[prof] ' + indent + msg);
+  }
+
   start(id) {
-    const now = Date.now();
-    if (this.ids.length > 0) {
-      this.totals[this.ids[this.ids.length - 1]] += now - this.lastTime;
-    }
-    this.lastTime = now;
-    this.ids.push(id);
-    this.totals[id] ||= 0;
+    this.log(`-> ${id}`)
+    const now = performance.now();
+    this.ids.push([id, now]);
   }
 
   stop(id) {
-    const now = Date.now();
-    assert(id === this.ids[this.ids.length - 1]);
-    this.totals[id] += now - this.lastTime;
-    this.lastTime = now;
-    this.ids.pop();
+    const [poppedId, startTime] = this.ids.pop();
+    assert(id === poppedId);
+    const now = performance.now();
+    const duration = now - startTime;
+    this.log(`<- ${id} [${duration.toFixed(1)} ms]`)
   }
 
-  print(text) {
-    const ids = Object.keys(this.totals);
-    if (ids.length > 0) {
-      ids.sort((a, b) => this.totals[b] - this.totals[a]);
-      printErr(
-        text + ' times: \n' + ids.map((id) => id + ' : ' + this.totals[id] + ' ms').join('\n'),
-      );
+  terminate() {
+    while (this.ids.length) {
+      const lastID = this.ids[this.ids.length - 1][0];
+      this.stop(lastID);
     }
+    // const overall = performance.now() - this.startTime
+    // printErr(`overall total: ${overall.toFixed(1)} ms`);
   }
+}
+
+class NullProfiler {
+  start(_id) {}
+  stop(_id) {}
+  terminate() {}
+}
+
+// Enable JS compiler profiling if EMPROFILE is "2".  This mode reports profile
+// data to stderr.
+const EMPROFILE = process.env.EMPROFILE == '2';
+
+export const timer = EMPROFILE ? new Profiler() : new NullProfiler();
+
+if (EMPROFILE) {
+  process.on('exit', () => timer.terminate());
 }
 
 /**
@@ -297,17 +335,38 @@ export function addToCompileTimeContext(object) {
   Object.assign(compileTimeContext, object);
 }
 
+const setLikeSettings = [
+  'EXPORTED_FUNCTIONS',
+  'WASM_EXPORTS',
+  'SIDE_MODULE_EXPORTS',
+  'INCOMING_MODULE_JS_API',
+  'ALL_INCOMING_MODULE_JS_API',
+  'EXTRA_INCOMING_JS_API',
+  'EXPORTED_RUNTIME_METHODS',
+  'WEAK_IMPORTS'
+];
+
 export function applySettings(obj) {
+  // Certain settings are read in as lists, but we convert them to Set
+  // within the compiler, for efficiency.
+  for (const key of setLikeSettings) {
+    if (typeof obj[key] !== 'undefined') {
+      obj[key] = new Set(obj[key]);
+    }
+  }
+
   // Make settings available both in the current / global context
-  // and also in the macro execution contexted.
+  // and also in the macro execution context.
   Object.assign(globalThis, obj);
   addToCompileTimeContext(obj);
 }
 
 export function loadSettingsFile(f) {
+  timer.start('loadSettingsFile')
   const settings = {};
   vm.runInNewContext(readFile(f), settings, {filename: f});
   applySettings(settings);
+  timer.stop('loadSettingsFile')
   return settings;
 }
 
@@ -325,6 +384,7 @@ export function runInMacroContext(code, options) {
 
 addToCompileTimeContext({
   assert,
+  decoratorSuffixes,
   error,
   isDecorator,
   isJsOnlySymbol,

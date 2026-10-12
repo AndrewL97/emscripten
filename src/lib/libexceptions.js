@@ -6,12 +6,14 @@
 
 var LibraryExceptions = {
 #if !WASM_EXCEPTIONS
-  $uncaughtExceptionCount: '0',
-  $exceptionLast: '0',
+  $uncaughtExceptionCount: 0,
+#if !DISABLE_EXCEPTION_CATCHING
+  $exceptionLast: null,
+#endif
   $exceptionCaught: ' []',
 
   // This class is the exception metadata which is prepended to each thrown object (in WASM memory).
-  // It is allocated in one block among with a thrown object in __cxa_allocate_exception and freed
+  // It is allocated in one block along with a thrown object in __cxa_allocate_exception and freed
   // in ___cxa_free_exception. It roughly corresponds to __cxa_exception structure in libcxxabi. The
   // class itself is just a native pointer wrapper, and contains all the necessary accessors for the
   // fields in the native structure.
@@ -82,7 +84,23 @@ var LibraryExceptions = {
 
   // Here, we throw an exception after recording a couple of values that we need to remember
   // We also remember that it was the last exception thrown as we need to know that later.
-  __cxa_throw__deps: ['$ExceptionInfo', '$exceptionLast', '$uncaughtExceptionCount'],
+  __cxa_throw__deps: ['$ExceptionInfo', '$uncaughtExceptionCount',
+#if !DISABLE_EXCEPTION_CATCHING
+    '$exceptionLast',
+    '__cxa_increment_exception_refcount',
+#endif
+#if EXCEPTION_STACK_TRACES
+    // When EXCEPTION_STACK_TRACES is enabled, the 'CppException' constructor
+    // calls getExceptionMessage. We can't track the dependency there, so we
+    // track it here.
+    '$getExceptionMessage',
+    // These functions can be necessary to prevent memory leaks from the JS
+    // side. Even though they are not used it here directly, we export them when
+    // 'throw' is used here.
+    '$decrementExceptionRefcount', '$incrementExceptionRefcount',
+#endif
+    '_Unwind_RaiseException',
+  ],
   __cxa_throw: (ptr, type, destructor) => {
 #if EXCEPTION_DEBUG
     dbg('__cxa_throw: ' + [ptrToString(ptr), type, ptrToString(destructor)]);
@@ -90,41 +108,48 @@ var LibraryExceptions = {
     var info = new ExceptionInfo(ptr);
     // Initialize ExceptionInfo content after it was allocated in __cxa_allocate_exception.
     info.init(type, destructor);
-    {{{ storeException('exceptionLast', 'ptr') }}}
+#if !DISABLE_EXCEPTION_CATCHING
+    ___cxa_increment_exception_refcount(ptr);
+    ptr = exceptionLast = new CppException(ptr);
+#endif
     uncaughtExceptionCount++;
-    {{{ makeThrow('exceptionLast') }}}
+    __Unwind_RaiseException(ptr);
   },
 
   // This exception will be caught twice, but while begin_catch runs twice,
   // we early-exit from end_catch when the exception has been rethrown, so
   // pop that here from the caught exceptions.
-  __cxa_rethrow__deps: ['$exceptionCaught', '$exceptionLast', '$uncaughtExceptionCount'],
+  __cxa_rethrow__deps: ['$exceptionCaught', '$uncaughtExceptionCount',
+#if !DISABLE_EXCEPTION_CATCHING
+    '$exceptionLast',
+    '__cxa_increment_exception_refcount',
+#endif
+    '_Unwind_RaiseException',
+  ],
   __cxa_rethrow: () => {
-    var info = exceptionCaught.pop();
-    if (!info) {
+    if (!exceptionCaught.length) {
       abort('no exception to throw');
     }
+    var info = exceptionCaught.at(-1);
     var ptr = info.excPtr;
-    if (!info.get_rethrown()) {
-      // Only pop if the corresponding push was through rethrow_primary_exception
-      exceptionCaught.push(info);
-      info.set_rethrown(true);
-      info.set_caught(false);
-      uncaughtExceptionCount++;
-    }
+    info.set_rethrown(true);
+    info.set_caught(false);
+    uncaughtExceptionCount++;
+#if !DISABLE_EXCEPTION_CATCHING
+    ___cxa_increment_exception_refcount(ptr);
 #if EXCEPTION_DEBUG
-    dbg('__cxa_rethrow, popped ' +
+    dbg('__cxa_rethrow: ' +
       [ptrToString(ptr), exceptionLast, 'stack', exceptionCaught]);
 #endif
-    {{{ storeException('exceptionLast', 'ptr') }}}
-    {{{ makeThrow('exceptionLast') }}}
+    ptr = exceptionLast = new CppException(ptr);
+#endif
+    __Unwind_RaiseException(ptr);
   },
 
   llvm_eh_typeid_for: (type) => type,
 
-  __cxa_begin_catch__deps: ['$exceptionCaught', '__cxa_increment_exception_refcount',
-                            '__cxa_get_exception_ptr',
-                            '$uncaughtExceptionCount'],
+  __cxa_begin_catch__deps: ['$exceptionCaught', '__cxa_get_exception_ptr',
+                            '$uncaughtExceptionCount', '$ExceptionInfo'],
   __cxa_begin_catch: (ptr) => {
     var info = new ExceptionInfo(ptr);
     if (!info.get_caught()) {
@@ -136,7 +161,6 @@ var LibraryExceptions = {
 #if EXCEPTION_DEBUG
     dbg('__cxa_begin_catch ' + [ptrToString(ptr), 'stack', exceptionCaught]);
 #endif
-    ___cxa_increment_exception_refcount(ptr);
     return ___cxa_get_exception_ptr(ptr);
   },
 
@@ -144,7 +168,11 @@ var LibraryExceptions = {
   // and free the exception. Note that if the dynCall on the destructor fails
   // due to calling apply on undefined, that means that the destructor is
   // an invalid index into the FUNCTION_TABLE, so something has gone wrong.
-  __cxa_end_catch__deps: ['$exceptionCaught', '$exceptionLast', '__cxa_decrement_exception_refcount', 'setThrew'],
+  __cxa_end_catch__deps: ['$exceptionCaught', '__cxa_decrement_exception_refcount', 'setThrew',
+#if !DISABLE_EXCEPTION_CATCHING
+    '$exceptionLast',
+#endif
+  ],
   __cxa_end_catch: () => {
     // Clear state flag.
     _setThrew(0, 0);
@@ -155,10 +183,12 @@ var LibraryExceptions = {
     var info = exceptionCaught.pop();
 
 #if EXCEPTION_DEBUG
-    dbg('__cxa_end_catch popped ' + [info, exceptionLast, 'stack', exceptionCaught]);
+    dbg('__cxa_end_catch popped ' + [info, 'stack', exceptionCaught]);
 #endif
     ___cxa_decrement_exception_refcount(info.excPtr);
-    exceptionLast = 0; // XXX in decRef?
+#if !DISABLE_EXCEPTION_CATCHING
+    exceptionLast = null; // XXX in decRef?
+#endif
   },
 
   __cxa_uncaught_exceptions__deps: ['$uncaughtExceptionCount'],
@@ -184,13 +214,27 @@ var LibraryExceptions = {
     return info.get_type();
   },
 
-  __cxa_rethrow_primary_exception__deps: ['$ExceptionInfo', '$exceptionCaught', '__cxa_rethrow'],
+  __cxa_rethrow_primary_exception__deps: ['$ExceptionInfo', '$uncaughtExceptionCount',
+#if !DISABLE_EXCEPTION_CATCHING
+    '$exceptionLast',
+    '__cxa_increment_exception_refcount',
+#endif
+    '_Unwind_RaiseException',
+  ],
   __cxa_rethrow_primary_exception: (ptr) => {
     if (!ptr) return;
+#if EXCEPTION_DEBUG
+    dbg('__cxa_rethrow_primary_exception: ' + ptrToString(ptr));
+#endif
     var info = new ExceptionInfo(ptr);
-    exceptionCaught.push(info);
     info.set_rethrown(true);
-    ___cxa_rethrow();
+    info.set_caught(false);
+    uncaughtExceptionCount++;
+#if !DISABLE_EXCEPTION_CATCHING
+    ___cxa_increment_exception_refcount(ptr);
+    ptr = exceptionLast = new CppException(ptr);
+#endif
+    __Unwind_RaiseException(ptr);
   },
 
   // Finds a suitable catch clause for when an exception is thrown.
@@ -202,14 +246,17 @@ var LibraryExceptions = {
   // unwinding using 'if' blocks around each function, so the remaining
   // functionality boils down to picking a suitable 'catch' block.
   // We'll do that here, instead, to keep things simpler.
-  $findMatchingCatch__deps: ['$exceptionLast', '$ExceptionInfo', '__cxa_can_catch', '$setTempRet0'],
-  $findMatchingCatch: (args) => {
-    var thrown =
-#if EXCEPTION_STACK_TRACES
-      exceptionLast?.excPtr;
-#else
-      exceptionLast;
+  $findMatchingCatch__deps: ['$setTempRet0',
+#if !DISABLE_EXCEPTION_CATCHING
+    '$exceptionLast', '$ExceptionInfo', '__cxa_can_catch',
 #endif
+  ],
+  $findMatchingCatch: (args) => {
+#if DISABLE_EXCEPTION_CATCHING
+    setTempRet0(0);
+    return 0;
+#else
+    var thrown = exceptionLast?.excPtr;
     if (!thrown) {
       // just pass through the null ptr
       setTempRet0(0);
@@ -233,7 +280,7 @@ var LibraryExceptions = {
     // type of the thrown object. Find one which matches, and
     // return the type of the catch block which should be called.
     for (var caughtType of args) {
-      if (caughtType === 0 || caughtType === thrownType) {
+      if (!caughtType || caughtType === thrownType) {
         // Catch all clause matched or exactly the same type is caught
         break;
       }
@@ -248,17 +295,23 @@ var LibraryExceptions = {
     }
     setTempRet0(thrownType);
     return thrown;
+#endif
   },
 
-  __resumeException__deps: ['$exceptionLast'],
+  __resumeException__deps: [
+#if !DISABLE_EXCEPTION_CATCHING
+    '$exceptionLast',
+#endif
+    '_Unwind_Resume',
+  ],
   __resumeException: (ptr) => {
+#if !DISABLE_EXCEPTION_CATCHING
 #if EXCEPTION_DEBUG
     dbg("__resumeException " + [ptrToString(ptr), exceptionLast]);
 #endif
-    if (!exceptionLast) {
-      {{{ storeException('exceptionLast', 'ptr') }}}
-    }
-    {{{ makeThrow('exceptionLast') }}}
+    ptr = exceptionLast ??= new CppException(ptr);
+#endif
+    __Unwind_Resume(ptr);
   },
 
 #endif
@@ -296,7 +349,12 @@ var LibraryExceptions = {
   // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/Exception
   // In release builds, this function is not needed and the native
   // _Unwind_RaiseException in libunwind is used instead.
-  __throw_exception_with_stack_trace__deps: ['$getCppExceptionTag', '$getExceptionMessage'],
+  __throw_exception_with_stack_trace__deps: [
+    '$getCppExceptionTag', '$getExceptionMessage',
+    // These functions can be necessary to prevent memory leaks from the JS
+    // side. Even though they are not used it here directly, we export them
+    // when 'throw' is used here.
+    '$decrementExceptionRefcount', '$incrementExceptionRefcount'],
   __throw_exception_with_stack_trace: (ex) => {
     var e = new WebAssembly.Exception(getCppExceptionTag(), [ex], {traceStack: true});
     e.message = getExceptionMessage(e);
@@ -313,6 +371,12 @@ var LibraryExceptions = {
     var unwind_header = ex.getArg(getCppExceptionTag(), 0);
     return ___thrown_object_from_unwind_exception(unwind_header);
   },
+
+  $incrementUncaughtExceptionCount__deps: ['__increment_uncaught_exception'],
+  $incrementUncaughtExceptionCount: '__increment_uncaught_exception',
+
+  $decrementUncaughtExceptionCount__deps: ['__decrement_uncaught_exception'],
+  $decrementUncaughtExceptionCount: '__decrement_uncaught_exception',
 
   $incrementExceptionRefcount__deps: ['__cxa_increment_exception_refcount', '$getCppExceptionThrownObjectFromWebAssemblyException'],
   $incrementExceptionRefcount: (ex) => {
@@ -332,16 +396,30 @@ var LibraryExceptions = {
     return getExceptionMessageCommon(ptr);
   },
 
-#elif !DISABLE_EXCEPTION_CATCHING
+#else
+#if !DISABLE_EXCEPTION_THROWING
+  $incrementUncaughtExceptionCount__deps: ['$uncaughtExceptionCount'],
+  $incrementUncaughtExceptionCount: () => {
+    uncaughtExceptionCount++;
+  },
+
+  $decrementUncaughtExceptionCount__deps: ['$uncaughtExceptionCount'],
+  $decrementUncaughtExceptionCount: () => {
+    uncaughtExceptionCount--;
+  },
+#endif
+
+#if !DISABLE_EXCEPTION_CATCHING
   $incrementExceptionRefcount__deps: ['__cxa_increment_exception_refcount'],
-  $incrementExceptionRefcount: (ptr) => ___cxa_increment_exception_refcount(ptr),
+  $incrementExceptionRefcount: (exn) => ___cxa_increment_exception_refcount(exn.excPtr),
 
   $decrementExceptionRefcount__deps: ['__cxa_decrement_exception_refcount'],
-  $decrementExceptionRefcount: (ptr) => ___cxa_decrement_exception_refcount(ptr),
+  $decrementExceptionRefcount: (exn) => ___cxa_decrement_exception_refcount(exn.excPtr),
 
   $getExceptionMessage__deps: ['$getExceptionMessageCommon'],
-  $getExceptionMessage: (ptr) => getExceptionMessageCommon(ptr),
+  $getExceptionMessage: (exn) => getExceptionMessageCommon(exn.excPtr),
 
+#endif
 #endif
 };
 
@@ -353,7 +431,7 @@ var LibraryExceptions = {
 // of these functions using JS 'arguments' object.
 addCxaCatch = (n) => {
   const args = [];
-  // Confusingly, the actual number of asrgument is n - 2. According to the llvm
+  // Confusingly, the actual number of argument is n - 2. According to the llvm
   // code in WebAssemblyLowerEmscriptenEHSjLj.cpp:
   // This is because a landingpad instruction contains two more arguments, a
   // personality function and a cleanup bit, and __cxa_find_matching_catch_N
@@ -364,7 +442,7 @@ addCxaCatch = (n) => {
     args.push(`arg${i}`);
     sig += 'p';
   }
-  const argString = args.join(',');
+  const argString = args.join();
   LibraryManager.library[`__cxa_find_matching_catch_${n}__sig`] = sig;
   LibraryManager.library[`__cxa_find_matching_catch_${n}__deps`] = ['$findMatchingCatch'];
   LibraryManager.library[`__cxa_find_matching_catch_${n}`] = eval(`(${args}) => findMatchingCatch([${argString}])`);

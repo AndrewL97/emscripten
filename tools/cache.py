@@ -3,15 +3,14 @@
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
 # found in the LICENSE file.
 
-"""Permanent cache for system libraries and ports.
-"""
+"""Permanent cache for system libraries and ports."""
 
 import contextlib
 import logging
 import os
 from pathlib import Path
 
-from . import filelock, config, utils
+from . import config, filelock, utils
 from .settings import settings
 
 logger = logging.getLogger('cache')
@@ -41,7 +40,7 @@ def acquire_cache_lock(reason):
     logger.debug(f'PID {os.getpid()} acquiring multiprocess file lock to Emscripten cache at {cachedir}')
     assert 'EM_CACHE_IS_LOCKED' not in os.environ, f'attempt to lock the cache while a parent process is holding the lock ({reason})'
     try:
-      cachelock.acquire(60)
+      cachelock.acquire(10 * 60)
     except filelock.Timeout:
       logger.warning(f'Accessing the Emscripten cache at "{cachedir}" (for "{reason}") is taking a long time, another process should be writing to it. If there are none and you suspect this process has deadlocked, try deleting the lock file "{cachelock_name}" and try again. If this occurs deterministically, consider filing a bug.')
       cachelock.acquire()
@@ -64,7 +63,7 @@ def release_cache_lock():
 
 @contextlib.contextmanager
 def lock(reason):
-  """A context manager that performs actions in the given directory."""
+  """Context manager that can be used to performs actions in the given directory."""
   acquire_cache_lock(reason)
   try:
     yield
@@ -83,6 +82,8 @@ def ensure():
 
 def erase():
   ensure_setup()
+  assert not config.FROZEN_CACHE, 'Cache cannot be erased when FROZEN_CACHE is set'
+
   with lock('erase'):
     # Delete everything except the lockfile itself
     utils.delete_contents(cachedir, exclude=[os.path.basename(cachelock_name)])
@@ -108,25 +109,30 @@ def get_sysroot_dir(*parts):
   return str(Path(get_sysroot(absolute=True), *parts))
 
 
-def get_lib_dir(absolute):
-  ensure_setup()
-  path = Path(get_sysroot(absolute=absolute), 'lib')
+def get_lib_dir_relative():
+  from .cmdline import options
+
   if settings.MEMORY64:
-    path = Path(path, 'wasm64-emscripten')
+    path = Path('wasm64-emscripten')
   else:
-    path = Path(path, 'wasm32-emscripten')
+    path = Path('wasm32-emscripten')
   # if relevant, use a subdir of the cache
   subdir = []
-  if settings.LTO:
-    if settings.LTO == 'thin':
+  if options.lto:
+    if options.lto == 'thin':
       subdir.append('thinlto')
     else:
       subdir.append('lto')
-  if settings.RELOCATABLE:
+  if settings.MAIN_MODULE or settings.SIDE_MODULE:
     subdir.append('pic')
   if subdir:
     path = Path(path, '-'.join(subdir))
   return path
+
+
+def get_lib_dir(absolute):
+  ensure_setup()
+  return Path(get_sysroot(absolute=absolute), 'lib', get_lib_dir_relative())
 
 
 def get_lib_name(name, absolute=False):
@@ -192,7 +198,7 @@ def get(shortname, creator, what=None, force=False, quiet=False):
 def setup():
   global cachedir, cachelock, cachelock_name
   # figure out the root directory for all caching
-  cachedir = Path(config.CACHE).resolve()
+  cachedir = Path(config.CACHE)
 
   # since the lock itself lives inside the cache directory we need to ensure it
   # exists.

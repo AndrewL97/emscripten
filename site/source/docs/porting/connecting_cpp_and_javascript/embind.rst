@@ -361,6 +361,11 @@ The JavaScript code does not need to worry about lifetime management.
     var person = Module.findPersonAtLocation([10.2, 156.5]);
     console.log('Found someone! Their name is ' + person.name + ' and they are ' + person.age + ' years old');
 
+.. note::
+    It is not recommended to use fields that correspond to regular C++ binding
+    (such as ``class_<T>``) since those properties will obey the normal lifetime
+    rules of their bound type and may require explicit cleanup in JavaScript.
+    See :ref:`Object Ownership <embind-object-ownership>` for more details.
 
 Advanced class concepts
 =======================
@@ -374,7 +379,7 @@ JavaScript and C++ have very different memory models which can lead to it being
 unclear which language owns and is responsible for deleting an object when it
 moves between languages. To make object ownership more explicit, *embind*
 supports smart pointers and return value policies. Return value
-polices dictate what happens to a C++ object when it is returned to JavaScript.
+policies dictate what happens to a C++ object when it is returned to JavaScript.
 
 To use a return value policy, pass the desired policy into function, method, or
 property bindings. For example:
@@ -825,6 +830,88 @@ type.
     Module.OldStyle.ONE;
     Module.NewStyle.TWO;
 
+
+You can control how C++ enums are exposed to JavaScript by specifying
+``enum_value_type`` when registering the enum.
+
+By default, enums use ``enum_value_type::object``. Enum values are bound
+as JavaScript objects with a ``value`` property containing the underlying
+C++ integer.
+
+.. code:: cpp
+
+    enum class Enum { ONE, TWO };
+
+    EMSCRIPTEN_BINDINGS(my_enum_example) {
+        enum_<Enum>("ObjectEnum", enum_value_type::object)
+            .value("ONE", Enum::ONE)
+            .value("TWO", Enum::TWO);
+    }
+
+.. code:: javascript
+
+    Module.ObjectEnum.ONE.value === 0;
+    Module.ObjectEnum.TWO.value === 1;
+
+Alternatively, you can use:
+
+- ``enum_value_type::number``: Enum values are bound directly as JavaScript numbers matching their C++
+  integer values.
+
+.. code:: cpp
+
+    EMSCRIPTEN_BINDINGS(my_enum_example) {
+        enum_<Enum>("NumberEnum", enum_value_type::number)
+            .value("ONE", Enum::ONE)
+            .value("TWO", Enum::TWO);
+    }
+
+.. code:: javascript
+
+    Module.NumberEnum.ONE === 0;
+    Module.NumberEnum.TWO === 1;
+
+- ``enum_value_type::string``: Enum values are bound as JavaScript strings containing their name.
+
+.. code:: cpp
+
+    EMSCRIPTEN_BINDINGS(my_enum_example) {
+        enum_<Enum>("StringEnum", enum_value_type::string)
+            .value("ONE", Enum::ONE)
+            .value("TWO", Enum::TWO);
+    }
+
+.. code:: javascript
+
+    Module.StringEnum.ONE === "ONE";
+    Module.StringEnum.TWO === "TWO";
+
+Regardless of the ``enum_value_type`` used, enum values can always be used as
+arguments to functions expecting the enum type.
+
+.. code:: cpp
+
+    void takesEnum(Enum e);
+
+    EMSCRIPTEN_BINDINGS(my_enum_example) {
+        function("takesEnum", &takesEnum);
+    }
+
+.. code:: javascript
+
+    // enum_value_type::object
+    Module.takesEnum(Module.ObjectEnum.ONE);
+
+    // enum_value_type::number
+    Module.takesEnum(Module.NumberEnum.ONE);
+    // OR
+    Module.takesEnum(0);
+
+    // enum_value_type::string
+    Module.takesEnum(Module.StringEnum.ONE);
+    // OR
+    Module.takesEnum("ONE");
+
 .. _embind-constants:
 
 Constants
@@ -976,9 +1063,6 @@ First consider the JavaScript below, which shows how to use the API:
 
 .. code-block:: javascript
 
-   // Get web audio api context
-   var AudioContext = window.AudioContext || window.webkitAudioContext;
-
    // Got an AudioContext: Create context and OscillatorNode
    var context = new AudioContext();
    var oscillator = context.createOscillator();
@@ -1005,10 +1089,6 @@ The code can be transliterated to C++ using ``val``, as shown below:
 
    int main() {
      val AudioContext = val::global("AudioContext");
-     if (!AudioContext.as<bool>()) {
-       printf("No global AudioContext, trying webkitAudioContext\n");
-       AudioContext = val::global("webkitAudioContext");
-     }
 
      printf("Got an AudioContext\n");
      val context = AudioContext.new_();
@@ -1026,11 +1106,10 @@ The code can be transliterated to C++ using ``val``, as shown below:
    }
 
 First we use :cpp:func:`~emscripten::val::global` to get the symbol for
-the global ``AudioContext`` object (or ``webkitAudioContext`` if that
-does not exist). We then use :cpp:func:`~emscripten::val::new_` to create
-the context, and from this context we can create an ``oscillator``,
-:cpp:func:`~emscripten::val::set` its properties (again using ``val``)
-and then play the tone.
+the global ``AudioContext`` object.  We then use
+:cpp:func:`~emscripten::val::new_` to create the context, and from this context
+we can create an ``oscillator``, :cpp:func:`~emscripten::val::set` its
+properties (again using ``val``) and then play the tone.
 
 The example can be compiled on the Linux/macOS terminal with::
 
@@ -1152,9 +1231,12 @@ The following JavaScript can be used to interact with the above C++.
     // push value into vector
     retVector.push_back(12);
 
-    // retrieve value from the vector
-    for (var i = 0; i < retVector.size(); i++) {
-        console.log("Vector Value: ", retVector.get(i));
+    // retrieve a value from the vector
+    console.log("Vector Value at index 0: ", retVector.get(0));
+
+    // iterate over vector
+    for (var value of retVector) {
+        console.log("Vector Value: ", value);
     }
 
     // expand vector size
@@ -1214,6 +1296,13 @@ produce `val` types. To give better type information, custom `val` types can be
 registered using :cpp:func:`EMSCRIPTEN_DECLARE_VAL_TYPE` in combination with
 :cpp:class:`emscripten::register_type`. An example below:
 
+Two registration forms are supported:
+
+* Single parameter: ``register_type<T>(definition)`` — the provided string is inlined
+    everywhere the type appears.
+* Two parameters: ``register_type<T>(name, definition)`` — creates a named TypeScript
+    type alias (``type name = definition;``) and uses ``name`` at call sites.
+
 .. code:: cpp
 
     EMSCRIPTEN_DECLARE_VAL_TYPE(CallbackType);
@@ -1226,6 +1315,9 @@ registered using :cpp:func:`EMSCRIPTEN_DECLARE_VAL_TYPE` in combination with
     EMSCRIPTEN_BINDINGS(custom_val) {
         function("function_with_callback_param", &function_with_callback_param);
         register_type<CallbackType>("(message: string) => void");
+
+        // Named alias form (emits: type Callback = (message: string) => void;)
+        register_type<CallbackType>("Callback", "(message: string) => void");
     }
 
 
@@ -1250,7 +1342,7 @@ While there is room for further optimisation, so far its performance in
 real-world applications has proved to be more than acceptable.
 
 .. _Test Suite: https://github.com/emscripten-core/emscripten/tree/main/test/embind
-.. _Connecting C++ and JavaScript on the Web with Embind: http://chadaustin.me/2014/09/connecting-c-and-javascript-on-the-web-with-embind/
+.. _Connecting C++ and JavaScript on the Web with Embind: https://web.archive.org/web/20150523023456/http://chadaustin.me/2014/09/connecting-c-and-javascript-on-the-web-with-embind/
 .. _Boost.Python: http://www.boost.org/doc/libs/1_56_0/libs/python/doc/
 .. _finalizers: http://en.wikipedia.org/wiki/Finalizer
 .. _FinalizationRegistry: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry

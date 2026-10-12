@@ -14,29 +14,31 @@
 // Stores/encodes the results of calling to cleanup handlers.
 int32_t cleanup_state = 1;
 
-static void cleanup_handler1(void *arg) {
+void cleanup_handler1(void *arg) {
   cleanup_state <<= 2;
   // Perform non-commutative arithmetic to a global var that encodes the cleanup stack order ops.
   cleanup_state *= (intptr_t)arg;
   printf("Called clean-up handler 1 with arg %p (state=%d)\n", arg, cleanup_state);
 }
 
-static void cleanup_handler2(void *arg) {
+void cleanup_handler2(void *arg) {
   cleanup_state <<= 3;
   // Perform non-commutative arithmetic to a global var that encodes the cleanup stack order ops.
   cleanup_state *= (intptr_t)arg;
   printf("Called clean-up handler 2 with arg %p (state=%d)\n", arg, cleanup_state);
 }
 
-static void *thread_start1(void *arg) {
+void *thread_start1(void *arg) {
+  printf("thread_start1\n");
   pthread_cleanup_push(cleanup_handler1, (void*)(42 + (long)arg*100));
   pthread_cleanup_push(cleanup_handler2, (void*)(69 + (long)arg*100));
   pthread_cleanup_pop((int)(intptr_t)arg);
   pthread_cleanup_pop((int)(intptr_t)arg);
+  printf("thread_start1 done\n");
   pthread_exit(0);
 }
 
-static void *thread_start2(void *arg) {
+void *thread_start2(void *arg) {
   pthread_cleanup_push(cleanup_handler1, (void*)52);
   pthread_cleanup_push(cleanup_handler2, (void*)79);
   if (arg)
@@ -46,7 +48,7 @@ static void *thread_start2(void *arg) {
   return 0;
 }
 
-static void *thread_start3(void *arg) {
+void *thread_start3(void *arg) {
   pthread_cleanup_push(cleanup_handler1, (void*)62);
   pthread_cleanup_push(cleanup_handler2, (void*)89);
   for (;;) {
@@ -60,20 +62,27 @@ static void *thread_start3(void *arg) {
 pthread_t thr[4];
 
 int main() {
+  int s;
   int result = 0;
 
   pthread_cleanup_push(cleanup_handler1, (void*)9998);
   pthread_cleanup_push(cleanup_handler1, (void*)9999);
 
-  int s = pthread_create(&thr[0], NULL, thread_start1, (void*)0);
+  s = pthread_create(&thr[0], NULL, thread_start1, (void*)0);
   assert(s == 0);
+  printf("joining thread 0");
   pthread_join(thr[0], 0);
+  printf("done join");
   s = pthread_create(&thr[1], NULL, thread_start1, (void*)1);
   assert(s == 0);
+  printf("joining thread 1");
   pthread_join(thr[1], 0);
+  printf("done join\n");
   s = pthread_create(&thr[2], NULL, thread_start2, (void*)1);
   assert(s == 0);
+  printf("joining thread 2");
   pthread_join(thr[2], 0);
+  printf("done join");
 // TODO
 //   s = pthread_create(&thr[3], NULL, thread_start3, (void*)1);
 //   assert(s == 0);

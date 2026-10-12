@@ -3,13 +3,13 @@
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
 # found in the LICENSE file.
 
-from typing import Dict, Set
-
 TAG = 'release-2.6.0'
 HASH = '2175d11a90211871f2289c8d57b31fe830e4b46af7361925c2c30cd521c1c677d2ee244feb682b6d3909cf085129255934751848fc81b480ea410952d990ffe0'
 
 deps = ['sdl2']
 variants = {
+  'sdl2_image-wasmsjlj': {'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': False},
+  'sdl2_image-legacysjlj': {'SUPPORT_LONGJMP': 'wasm', 'WASM_LEGACY_EXCEPTIONS': True},
   'sdl2_image-jpg':    {'SDL2_IMAGE_FORMATS': ["jpg"]},
   'sdl2_image-png':    {'SDL2_IMAGE_FORMATS': ["png"]},
   'sdl2_image-jpg-mt': {'SDL2_IMAGE_FORMATS': ["jpg"], 'PTHREADS': 1},
@@ -24,7 +24,7 @@ SUPPORTED_FORMATS = {'bmp', 'gif', 'jpg', 'lbm', 'pcx', 'png',
                      'pnm', 'qoi', 'svg', 'tga', 'xcf', 'xpm', 'xv'}
 
 # user options (from --use-port)
-opts: Dict[str, Set] = {
+opts: dict[str, set] = {
   'formats': set(),
 }
 
@@ -41,12 +41,15 @@ def get_lib_name(settings):
   formats = '-'.join(sorted(get_formats(settings)))
 
   libname = 'libSDL2_image'
-  if formats != '':
+  if formats:
     libname += '-' + formats
   if settings.PTHREADS:
     libname += '-mt'
   if settings.SUPPORT_LONGJMP == 'wasm':
-    libname += '-wasm-sjlj'
+    if settings.WASM_LEGACY_EXCEPTIONS:
+      libname += '-legacysjlj'
+    else:
+      libname += '-wasmsjlj'
   return libname + '.a'
 
 
@@ -78,6 +81,7 @@ def get(ports, settings, shared):
 
     if settings.SUPPORT_LONGJMP == 'wasm':
       flags.append('-sSUPPORT_LONGJMP=wasm')
+      flags.append(f'-sWASM_LEGACY_EXCEPTIONS={int(settings.WASM_LEGACY_EXCEPTIONS)}')
 
     ports.build_port(src_dir, final, 'sdl2_image', flags=flags, srcs=srcs)
 

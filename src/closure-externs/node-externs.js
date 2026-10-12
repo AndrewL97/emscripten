@@ -93,14 +93,6 @@ Buffer.alloc = function(size, fill, encoding) {};
 Buffer.isBuffer = function(obj) {};
 
 /**
- * @param {number=} start
- * @param {number=} end
- * @return {Buffer}
- * @nosideeffects
- */
-Buffer.prototype.slice = function(start, end) {};
-
-/**
  * @param {string=} encoding
  * @param {number=} start
  * @param {number=} end
@@ -144,3 +136,30 @@ path.isAbsolute;
 path.posix;
 
 crypto.randomFillSync;
+
+/**
+ * @suppress {duplicate}
+ */
+var worker_threads = {};
+
+/**
+ * @type {boolean}
+ */
+worker_threads.isMainThread;
+
+/**
+ * @type {function()}
+ */
+worker_threads.Worker;
+
+/**
+ * @type {Object}
+ */
+worker_threads.workerData;
+
+worker_threads.parentPort;
+
+/**
+ * @type {number}
+ */
+process.stdin.fd;

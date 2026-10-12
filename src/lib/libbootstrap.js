@@ -8,12 +8,27 @@
 // it itself depends on the struct info information.
 
 #if !BOOTSTRAPPING_STRUCT_INFO
-assert(false, "libbootstrap.js only designed for use with BOOTSTRAPPING_STRUCT_INFO")
+assert(false, 'libbootstrap.js only designed for use with BOOTSTRAPPING_STRUCT_INFO')
 #endif
 
-assert(Object.keys(LibraryManager.library).length === 0);
+assert(!Object.keys(LibraryManager.library).length);
 addToLibrary({
   $callRuntimeCallbacks: () => {},
+
+  $HEAP8: undefined,
+  $HEAPU8: undefined,
+  $HEAP16: undefined,
+  $HEAPU16: undefined,
+  $HEAP32: undefined,
+  $HEAPU32: undefined,
+  $HEAPF32: undefined,
+  $HEAPF64: undefined,
+#if WASM_BIGINT
+  $HEAP64: undefined,
+  $HEAPU64: undefined,
+#endif
+
+  $wasmMemory: 'memory',
 
   $ExitStatus: class {
     name = 'ExitStatus';
@@ -42,7 +57,7 @@ addToLibrary({
       var ptr = {{{ makeGetValue('iov', 0, '*') }}};
       var len = {{{ makeGetValue('iov', POINTER_SIZE, '*') }}};
       iov += {{{ POINTER_SIZE }}} * 2;
-      process.stdout.write(HEAPU8.subarray(ptr, ptr + len));
+      fs.writeSync(fd, HEAPU8, ptr, len);
       num += len;
     }
     {{{ makeSetValue('pnum', 0, 'num', '*') }}};

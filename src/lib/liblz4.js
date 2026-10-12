@@ -6,7 +6,7 @@
 
 #if LZ4
 addToLibrary({
-  $LZ4__deps: ['$FS', '$preloadPlugins', '$getUniqueRunDependency'],
+  $LZ4__deps: ['$FS', '$preloadPlugins'],
   $LZ4: {
     DIR_MODE: {{{ cDefs.S_IFDIR | 0o777 }}},
     FILE_MODE: {{{ cDefs.S_IFREG | 0o777 }}},
@@ -20,7 +20,7 @@ addToLibrary({
       })();
       LZ4.CHUNK_SIZE = LZ4.codec.CHUNK_SIZE;
     },
-    loadPackage(pack, preloadPlugin) {
+    async loadPackage(pack, preloadPlugin) {
       LZ4.init();
       var compressedData = pack['compressedData'] || LZ4.codec.compressPackage(pack['data']);
       assert(compressedData['cachedIndexes'].length === compressedData['cachedChunks'].length);
@@ -30,17 +30,17 @@ addToLibrary({
                                                                       compressedData['cachedOffset'] + (i+1)*LZ4.CHUNK_SIZE);
         assert(compressedData['cachedChunks'][i].length === LZ4.CHUNK_SIZE);
       }
-      pack['metadata'].files.forEach((file) => {
+      for (var file of pack['metadata'].files) {
         var dir = PATH.dirname(file.filename);
         var name = PATH.basename(file.filename);
         FS.createPath('', dir, true, true);
-        var parent = FS.analyzePath(dir).object;
+        var parent = FS.lookupPath(dir).node;
         LZ4.createNode(parent, name, LZ4.FILE_MODE, 0, {
           compressedData,
           start: file.start,
           end: file.end,
         });
-      });
+      }
       // Preload files if necessary. This code is largely similar to
       // createPreloadedFile in library_fs.js. However, a main difference here
       // is that we only decompress the file if it can be preloaded.
@@ -48,21 +48,19 @@ addToLibrary({
       // worth.
       if (preloadPlugin) {
         Browser.init();
-        pack['metadata'].files.forEach((file) => {
-          var handled = false;
+        for (var file of pack['metadata'].files) {
           var fullname = file.filename;
-          preloadPlugins.forEach((plugin) => {
-            if (handled) return;
+          for (var plugin of preloadPlugins) {
             if (plugin['canHandle'](fullname)) {
-              var dep = getUniqueRunDependency('fp ' + fullname);
-              addRunDependency(dep);
-              var finish = () => removeRunDependency(dep);
               var byteArray = FS.readFile(fullname);
-              plugin['handle'](byteArray, fullname, finish, finish);
-              handled = true;
+#if ASSERTIONS
+              assert(plugin['handle'].constructor.name === 'AsyncFunction', 'Filesystem plugin handlers must be async functions (See #24914)')
+#endif
+              await plugin['handle'](byteArray, fullname);
+              break;
             }
-          });
-        });
+          }
+        }
       }
     },
     createNode(parent, name, mode, dev, contents, mtime) {

@@ -9,9 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static int totalAllocs;
-static int totalFrees;
-static int totalReallocs;
+int totalAllocs;
+int totalFrees;
+int totalReallocs;
 
 void *malloc(size_t size) {
   ++totalAllocs;
@@ -43,7 +43,7 @@ int main() {
     void *ptr = malloc(1024 * 1024);
     // Make sure we do something with the pointer do ensure the optimizer
     // doesn't completely remove the allocation.
-    emscripten_console_logf("alloacted: %p", ptr);
+    emscripten_console_logf("allocated: %p", ptr);
     free(ptr);
   }
 
@@ -56,6 +56,6 @@ int main() {
   assert(totalAllocs == 21);
   assert(totalReallocs == 1);
   assert(totalFrees == 20);
-  emscripten_console_logf("OK.");
+  emscripten_console_logf("done");
   return 0;
 }

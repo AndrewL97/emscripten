@@ -26,12 +26,11 @@ if (ENVIRONMENT_IS_PTHREAD) {
   // Thread-local guard variable for one-time init of the JS state
   var initializedJS = false;
 
-#if LOAD_SOURCE_MAP || USE_OFFSET_CONVERTER
+#if LOAD_SOURCE_MAP
   // When using postMessage to send an object, it is processed by the structured
   // clone algorithm.  The prototype, and hence methods, on that object is then
   // lost. This function adds back the lost prototype.  This does not work with
-  // nested objects that has prototypes, but it suffices for WasmSourceMap and
-  // WasmOffsetConverter.
+  // nested objects that has prototypes, but it suffices for WasmSourceMap.
   function resetPrototype(constructor, attrs) {
     var object = Object.create(constructor.prototype);
     return Object.assign(object, attrs);
@@ -42,12 +41,12 @@ if (ENVIRONMENT_IS_PTHREAD) {
   // notified about them.
   self.onunhandledrejection = (e) => { throw e.reason || e; };
 
-  {{{ asyncIf(ASYNCIFY == 2) }}}function handleMessage(e) {
+  {{{ asyncIf(ASYNCIFY == 2 || MAIN_MODULE) }}}function handleMessage(e) {
     try {
-      var msgData = e['data'];
+      var msgData = e.data;
       //dbg('msgData: ' + Object.keys(msgData));
       var cmd = msgData.cmd;
-      if (cmd === 'load') { // Preload command that is called once per worker to parse and load the Emscripten code.
+      if (cmd == {{{ CMD_LOAD }}}) { // Preload command that is called once per worker to parse and load the Emscripten code.
 #if ASSERTIONS
         workerID = msgData.workerID;
 #endif
@@ -62,7 +61,7 @@ if (ENVIRONMENT_IS_PTHREAD) {
         // And add a callback for when the runtime is initialized.
         startWorker = () => {
           // Notify the main thread that this thread has loaded.
-          postMessage({ cmd: 'loaded' });
+          postMessage({ cmd: {{{ CMD_LOADED }}} });
           // Process any messages that were queued before the thread was ready.
           for (let msg of messageQueue) {
             handleMessage(msg);
@@ -82,7 +81,7 @@ if (ENVIRONMENT_IS_PTHREAD) {
         // Use `const` here to ensure that the variable is scoped only to
         // that iteration, allowing safe reference from a closure.
         for (const handler of msgData.handlers) {
-          // The the main module has a handler for a certain even, but no
+          // If the main module has a handler for a certain event, but no
           // handler exists on the pthread worker, then proxy that handler
           // back to the main thread.
           if (!Module[handler] || Module[handler].proxy) {
@@ -93,7 +92,7 @@ if (ENVIRONMENT_IS_PTHREAD) {
 #if RUNTIME_DEBUG
               dbg(`worker: calling handler on main thread: ${handler}`);
 #endif
-              postMessage({ cmd: 'callHandler', handler, args: args });
+              postMessage({ cmd: {{{ CMD_CALL_HANDLER }}}, handler, args: args });
             }
             // Rebind the out / err handlers if needed
             if (handler == 'print') out = Module[handler];
@@ -112,9 +111,6 @@ if (ENVIRONMENT_IS_PTHREAD) {
 #if LOAD_SOURCE_MAP
         wasmSourceMap = resetPrototype(WasmSourceMap, msgData.wasmSourceMap);
 #endif
-#if USE_OFFSET_CONVERTER
-        wasmOffsetConverter = resetPrototype(WasmOffsetConverter, msgData.wasmOffsetConverter);
-#endif
 
 #if !WASM_ESM_INTEGRATION
 #if MINIMAL_RUNTIME
@@ -122,12 +118,22 @@ if (ENVIRONMENT_IS_PTHREAD) {
         Module['wasm'] = msgData.wasmModule;
         loadModule();
 #else
-        wasmModuleReceived(msgData.wasmModule);
+        wasmModule = msgData.wasmModule;
+#if MODULARIZE == 'instance'
+        init();
+#else
+        {{{ awaitIf(MAIN_MODULE) }}}createWasm();
+        run();
+#endif
 #endif // MINIMAL_RUNTIME
 #endif
-      } else if (cmd === 'run') {
+#if !MINIMAL_RUNTIME
+        startWorker();
+#endif
+      } else if (cmd == {{{ CMD_RUN }}}) {
 #if ASSERTIONS
         assert(msgData.pthread_ptr);
+        assert(wasmMemory, "CMD_RUN received before CMD_LOAD");
 #endif
         // Call inside JS module to set up the stack frame for this pthread in JS module scope.
         // This needs to be the first thing that we do, as we cannot call to any C/C++ functions
@@ -171,9 +177,7 @@ if (ENVIRONMENT_IS_PTHREAD) {
           dbg(`worker: Pthread 0x${_pthread_self().toString(16)} completed its main entry point with an 'unwind', keeping the worker alive for asynchronous operation.`);
 #endif
         }
-      } else if (msgData.target === 'setimmediate') {
-        // no-op
-      } else if (cmd === 'checkMailbox') {
+      } else if (cmd == {{{ CMD_CHECK_MAILBOX }}}) {
         if (initializedJS) {
           checkMailbox();
         }
@@ -189,7 +193,7 @@ if (ENVIRONMENT_IS_PTHREAD) {
       err(`worker: onmessage() captured an uncaught exception: ${ex}`);
       if (ex?.stack) err(ex.stack);
 #endif
-      __emscripten_thread_crashed();
+      if (runtimeInitialized) __emscripten_thread_crashed();
       throw ex;
     }
   };

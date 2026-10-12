@@ -14,7 +14,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-static void create_file(const char *path, const char *buffer, int mode) {
+void create_file(const char *path, const char *buffer, int mode) {
   printf("creating: %s\n", path);
   int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, mode);
   assert(fd >= 0);
@@ -67,24 +67,27 @@ void test() {
   // Test empty pathname
   err = unlink("");
   assert(err == -1);
-  printf("%s\n", strerror(errno));
+  printf("errno: %s\n", strerror(errno));
   assert(errno == ENOENT);
 
   err = unlink("dir-readonly");
   assert(err == -1);
+  printf("errno: %s\n", strerror(errno));
 
-  // emscripten uses 'musl' what is an implementation of the standard library for Linux-based systems
+  // emscripten uses 'musl' which is an implementation of the standard library for Linux-based systems
 #if defined(__linux__) || defined(__EMSCRIPTEN__)
   // Here errno is supposed to be EISDIR, but it is EPERM for NODERAWFS on macOS.
-  // See issue #6121.
-  assert(errno == EISDIR || errno == EPERM);
+  // See https://github.com/emscripten-core/emscripten/issues/6121.
+  // Also, deno returns ENOTEMPTY:
+  // https://github.com/emscripten-core/emscripten/issues/26240
+  assert(errno == EISDIR || errno == EPERM || errno == ENOTEMPTY);
 #else
   assert(errno == EPERM);
 #endif
 
 #ifndef SKIP_ACCESS_TESTS
   err = unlink("dir-readonly/anotherfile");
-  printf("err: %d %d\n", err, errno);
+  printf("unlink: %d %s\n", err, strerror(errno));
   assert(err == -1);
   assert(errno == EACCES);
 #endif
@@ -137,7 +140,8 @@ void test() {
   // Update: Removing cwd on Linux does not return EBUSY.
   // WASMFS behaviour will match the native FS.
 #ifndef __APPLE__
-  getcwd(buffer, sizeof(buffer));
+  char* cwd = getcwd(buffer, sizeof(buffer));
+  assert(cwd != NULL);
   printf("CWD: %s\n", buffer);
   err = rmdir(buffer);
   assert(err == -1);
@@ -168,12 +172,11 @@ void test() {
   err = access("dir-empty", F_OK);
   assert(err == -1);
 
-  puts("success");
+  puts("done");
 }
 
 int main() {
   setup();
   test();
-
   return 0;
 }

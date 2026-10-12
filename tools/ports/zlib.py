@@ -6,8 +6,8 @@
 import os
 import shutil
 
-VERSION = '1.3.1'
-HASH = '8c9642495bafd6fad4ab9fb67f09b268c69ff9af0f4f20cf15dfc18852ff1f312bd8ca41de761b3f8d8e90e77d79f2ccacd3d4c5b19e475ecf09d021fdfe9088'
+VERSION = '1.3.2'
+HASH = '16fea4df307a68cf0035858abe2fd550250618a97590e202037acd18a666f57afc10f8836cbbd472d54a0e76539d0e558cb26f059d53de52ff90634bbf4f47d4'
 
 
 def needed(settings):
@@ -23,7 +23,7 @@ def get(ports, settings, shared):
     zconf_h = os.path.join(os.path.dirname(__file__), 'zlib/zconf.h')
     shutil.copyfile(zconf_h, os.path.join(source_path, 'zconf.h'))
     ports.install_headers(source_path)
-    ports.make_pkg_config('zlib', VERSION, '-sUSE_ZIB')
+    ports.make_pkg_config('zlib', VERSION, '-sUSE_ZLIB')
 
     # build
     srcs = 'adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c gzread.c gzwrite.c infback.c inffast.c inflate.c inftrees.c trees.c uncompr.c zutil.c'.split()
@@ -39,4 +39,3 @@ def clear(ports, settings, shared):
 
 def show():
   return 'zlib (-sUSE_ZLIB or --use-port=zlib; zlib license)'
-

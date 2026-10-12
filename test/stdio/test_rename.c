@@ -161,7 +161,7 @@ void test() {
 #endif
   assert(!err);
 
-  // Test that non-existant parent during rename generates the correct error
+  // Test that non-existent parent during rename generates the correct error
   // code.
   err = rename("dir/hicsuntdracones/empty", "dir/hicsuntdracones/renamed");
   assert(err == -1);
@@ -215,7 +215,7 @@ void test() {
   assert(errno == EXDEV);
 #endif
 
-  puts("success");
+  puts("done");
 }
 
 int main() {

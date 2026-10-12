@@ -5,10 +5,8 @@
 # found in the LICENSE file.
 
 import sys
-import emcc
-from tools import shared
 
-shared.run_via_emxx = True
+import emcc
 
 if __name__ == '__main__':
   try:

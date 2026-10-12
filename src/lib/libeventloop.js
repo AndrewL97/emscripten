@@ -11,25 +11,44 @@ LibraryJSEventLoop = {
     throw 'unwind';
   },
 
+  // Just like setTimeout but returns an i32 that can be passed back to wasm
+  // rather than a JS object, and holds a runtime keepalive while pending.
+  // Ids are sequential and, like setTimeout's, never zero; the native handle
+  // is retained only while pending.
   $safeSetTimeout__deps: ['$callUserCallback'],
   $safeSetTimeout__docs: '/** @param {number=} timeout */',
+  $safeSetTimeout__postset: 'safeSetTimeout.pending = new Map(); safeSetTimeout.nextId = 1;',
   $safeSetTimeout: (func, timeout) => {
     {{{ runtimeKeepalivePush() }}}
-    return setTimeout(() => {
+    var id = safeSetTimeout.nextId++;
+    safeSetTimeout.pending.set(id, setTimeout(() => {
+      safeSetTimeout.pending.delete(id);
       {{{ runtimeKeepalivePop() }}}
       callUserCallback(func);
-    }, timeout);
+    }, timeout));
+    return id;
+  },
+
+  // Clears a pending safeSetTimeout and releases its keepalive. No-op if the
+  // timeout has already fired or been cleared.
+  $safeClearTimeout__deps: ['$safeSetTimeout'],
+  $safeClearTimeout: (id) => {
+    var handle = safeSetTimeout.pending.get(id);
+    if (!handle) return;
+    safeSetTimeout.pending.delete(id);
+    clearTimeout(handle);
+    {{{ runtimeKeepalivePop() }}}
   },
 
   // Just like setImmediate but returns an i32 that can be passed back
   // to wasm rather than a JS object.
+  $setImmediateWrapped__postset: 'setImmediateWrapped.pending = new Map(); setImmediateWrapped.nextId = 1;',
   $setImmediateWrapped: (func) => {
-    setImmediateWrapped.mapping ||= [];
-    var id = setImmediateWrapped.mapping.length;
-    setImmediateWrapped.mapping[id] = setImmediate(() => {
-      setImmediateWrapped.mapping[id] = undefined;
+    var id = setImmediateWrapped.nextId++;
+    setImmediateWrapped.pending.set(id, setImmediate(() => {
+      setImmediateWrapped.pending.delete(id);
       func();
-    });
+    }));
     return id;
   },
 
@@ -43,46 +62,53 @@ LibraryJSEventLoop = {
   },
 
   // Just like clearImmediate but takes an i32 rather than an object.
+  // Returns true if the immediate was still pending.
   $clearImmediateWrapped: (id) => {
-#if ASSERTIONS
-    assert(id);
-    assert(setImmediateWrapped.mapping[id]);
-#endif
-    clearImmediate(setImmediateWrapped.mapping[id]);
-    setImmediateWrapped.mapping[id] = undefined;
+    var handle = setImmediateWrapped.pending.get(id);
+    if (!handle) return false;
+    setImmediateWrapped.pending.delete(id);
+    clearImmediate(handle);
+    return true;
   },
 
   $emSetImmediate__deps: ['$setImmediateWrapped', '$clearImmediateWrapped', '$emClearImmediate'],
   $emSetImmediate__postset: `
-    if (typeof setImmediate != "undefined") {
+    if (globalThis.setImmediate) {
       emSetImmediate = setImmediateWrapped;
       emClearImmediate = clearImmediateWrapped;
-    } else if (typeof addEventListener == "function") {
+    } else if (globalThis.addEventListener) {
       var __setImmediate_id_counter = 0;
       var __setImmediate_queue = [];
-      var __setImmediate_message_id = "_si";
+      var __setImmediate_message_id = '_si';
       /** @param {Event} e */
       var __setImmediate_cb = (e) => {
         if (e.data === __setImmediate_message_id) {
           e.stopPropagation();
-          __setImmediate_queue.shift()();
+          __setImmediate_queue.shift()?.();
           ++__setImmediate_id_counter;
         }
       }
-      addEventListener("message", __setImmediate_cb, true);
+      addEventListener('message', __setImmediate_cb, true);
       emSetImmediate = (func) => {
-        postMessage(__setImmediate_message_id, "*");
+#if PTHREADS
+        if (ENVIRONMENT_IS_WORKER) {
+          postMessage(__setImmediate_message_id);
+        } else
+#endif
+        postMessage(__setImmediate_message_id, '*');
         return __setImmediate_id_counter + __setImmediate_queue.push(func) - 1;
       }
       emClearImmediate = /**@type{function(number=)}*/((id) => {
         var index = id - __setImmediate_id_counter;
+        if (index < 0 || !__setImmediate_queue[index]) return false;
         // must preserve the order and count of elements in the queue, so replace the pending callback with an empty function
-        if (index >= 0 && index < __setImmediate_queue.length) __setImmediate_queue[index] = () => {};
+        __setImmediate_queue[index] = null;
+        return true;
       })
     }`,
   $emSetImmediate: undefined,
 
-  $emClearImmediate_deps: ['$emSetImmediate'],
+  $emClearImmediate__deps: ['$emSetImmediate'],
   $emClearImmediate: undefined,
 
   emscripten_set_immediate__deps: ['$emSetImmediate', '$callUserCallback'],
@@ -90,14 +116,15 @@ LibraryJSEventLoop = {
     {{{ runtimeKeepalivePush(); }}}
     return emSetImmediate(() => {
       {{{ runtimeKeepalivePop(); }}}
-      callUserCallback(() => {{{ makeDynCall('vp', 'cb') }}}(userData));
+      callUserCallback({{{ makeDynCall('vp', 'cb') }}}, userData);
     });
   },
 
   emscripten_clear_immediate__deps: ['$emClearImmediate'],
   emscripten_clear_immediate: (id) => {
-    {{{ runtimeKeepalivePop(); }}}
-    emClearImmediate(id);
+    if (emClearImmediate(id)) {
+      {{{ runtimeKeepalivePop(); }}}
+    }
   },
 
   emscripten_set_immediate_loop__deps: ['$emSetImmediate', '$callUserCallback'],
@@ -119,13 +146,7 @@ LibraryJSEventLoop = {
   emscripten_set_timeout: (cb, msecs, userData) =>
     safeSetTimeout(() => {{{ makeDynCall('vp', 'cb') }}}(userData), msecs),
 
-#if AUDIO_WORKLET
-  // Use a wrapper function here since simply aliasing `clearTimeout` would
-  // cause the module to fail to load in the audio worklet context.
-  emscripten_clear_timeout: (id) => clearTimeout(id),
-#else
-  emscripten_clear_timeout: 'clearTimeout',
-#endif
+  emscripten_clear_timeout: '$safeClearTimeout',
 
   emscripten_set_timeout_loop__deps: ['$callUserCallback', 'emscripten_get_now'],
   emscripten_set_timeout_loop: (cb, msecs, userData) => {
@@ -141,7 +162,7 @@ LibraryJSEventLoop = {
           // (https://stackoverflow.com/questions/8430966/is-calling-settimeout-with-a-negative-delay-ok)
           var remaining = n - _emscripten_get_now();
 #if ENVIRONMENT_MAY_BE_NODE
-          // Recent revsions of node, however, give TimeoutNegativeWarning
+          // Recent revisions of node, however, give TimeoutNegativeWarning
           remaining = Math.max(0, remaining);
 #endif
           setTimeout(tick, remaining);
@@ -155,9 +176,7 @@ LibraryJSEventLoop = {
   emscripten_set_interval__deps: ['$callUserCallback'],
   emscripten_set_interval: (cb, msecs, userData) => {
     {{{ runtimeKeepalivePush() }}}
-    return setInterval(() => {
-      callUserCallback(() => {{{ makeDynCall('vp', 'cb') }}}(userData));
-    }, msecs);
+    return setInterval(() => callUserCallback({{{ makeDynCall('vp', 'cb') }}}, userData), msecs);
   },
 
   emscripten_clear_interval: (id) => {
@@ -183,12 +202,12 @@ LibraryJSEventLoop = {
 
   $registerPostMainLoop: (f) => {
     // Does nothing unless $MainLoop is included/used.
-    typeof MainLoop != 'undefined' && MainLoop.postMainLoop.push(f);
+    typeof MainLoop !== 'undefined' && MainLoop.postMainLoop.push(f);
   },
 
   $registerPreMainLoop: (f) => {
     // Does nothing unless $MainLoop is included/used.
-    typeof MainLoop != 'undefined' && MainLoop.preMainLoop.push(f);
+    typeof MainLoop !== 'undefined' && MainLoop.preMainLoop.push(f);
   },
 
   $MainLoop__internal: true,
@@ -199,17 +218,18 @@ LibraryJSEventLoop = {
     Module['resumeMainLoop'] = MainLoop.resume;
     MainLoop.init();`,
   $MainLoop: {
-    running: false,
+    // The main loop tick function that will be called at each iteration.
+    // This will be non-null whenever a loop function is registered.
+    func: null,
+    // This will be non-null whenever a loop function is both registered and
+    // currently running.
     scheduler: null,
-    method: '',
     // Each main loop is numbered with a ID in sequence order. Only one main
     // loop can run at a time. This variable stores the ordinal number of the
     // main loop that is currently allowed to run. All previous main loops
     // will quit themselves. This is incremented whenever a new main loop is
     // created.
     currentlyRunningMainloop: 0,
-    // The main loop tick function that will be called at each iteration.
-    func: null,
     // The argument that will be passed to the main loop. (of type void*)
     arg: 0,
     timingMode: 0,
@@ -220,9 +240,12 @@ LibraryJSEventLoop = {
     postMainLoop: [],
 
     pause() {
-      MainLoop.scheduler = null;
-      // Incrementing this signals the previous main loop that it's now become old, and it must return.
-      MainLoop.currentlyRunningMainloop++;
+      if (MainLoop.scheduler) {
+        MainLoop.scheduler = null;
+        // Incrementing this signals the previous main loop that it's now become old, and it must return.
+        MainLoop.currentlyRunningMainloop++;
+        {{{ runtimeKeepalivePop() }}}
+      }
     },
 
     resume() {
@@ -286,7 +309,7 @@ LibraryJSEventLoop = {
     fakeRequestAnimationFrame(func) {
       // try to keep 60fps between calls to here
       var now = Date.now();
-      if (MainLoop.nextRAF === 0) {
+      if (!MainLoop.nextRAF) {
         MainLoop.nextRAF = now + 1000/60;
       } else {
         while (now + 2 >= MainLoop.nextRAF) { // fudge a little, to avoid timer jitter causing us to do lots of delay:0
@@ -298,7 +321,7 @@ LibraryJSEventLoop = {
     },
 
     requestAnimationFrame(func) {
-      if (typeof requestAnimationFrame == 'function') {
+      if (globalThis.requestAnimationFrame) {
         requestAnimationFrame(func);
       } else {
         MainLoop.fakeRequestAnimationFrame(func);
@@ -324,53 +347,67 @@ LibraryJSEventLoop = {
       return 1; // Return non-zero on failure, can't set timing mode when there is no main loop.
     }
 
-    if (!MainLoop.running) {
-      {{{ runtimeKeepalivePush() }}}
-      MainLoop.running = true;
+#if useRuntimeKeepaliveStack()
+    // If there is no existing scheduler then we are transitioning from
+    // inactive to active and we add to runtime keepalive counter.
+    if (!MainLoop.scheduler) {
+      runtimeKeepalivePush();
     }
+#endif
     if (mode == {{{ cDefs.EM_TIMING_SETTIMEOUT }}}) {
       MainLoop.scheduler = function MainLoop_scheduler_setTimeout() {
         var timeUntilNextTick = Math.max(0, MainLoop.tickStartTime + value - _emscripten_get_now())|0;
         setTimeout(MainLoop.runner, timeUntilNextTick); // doing this each time means that on exception, we stop
       };
-      MainLoop.method = 'timeout';
     } else if (mode == {{{ cDefs.EM_TIMING_RAF }}}) {
       MainLoop.scheduler = function MainLoop_scheduler_rAF() {
         MainLoop.requestAnimationFrame(MainLoop.runner);
       };
-      MainLoop.method = 'rAF';
-    } else if (mode == {{{ cDefs.EM_TIMING_SETIMMEDIATE}}}) {
-      if (typeof MainLoop.setImmediate == 'undefined') {
-        if (typeof setImmediate == 'undefined') {
+    } else {
+#if ASSERTIONS
+      assert(mode == {{{ cDefs.EM_TIMING_SETIMMEDIATE}}});
+#endif
+      if (!MainLoop.setImmediate) {
+        if (globalThis.scheduler) {
+          // Some modern browsers implement scheduler.postTask, but not all.
+#if RUNTIME_DEBUG
+          dbg('setImmediate: using scheduler.postTask');
+#endif
+          MainLoop.setImmediate = scheduler.postTask.bind(scheduler);
+#if ENVIRONMENT_MAY_BE_NODE
+        } else if (globalThis.setImmediate) {
+          MainLoop.setImmediate = setImmediate;
+#endif
+        } else {
+#if RUNTIME_DEBUG
+          dbg('setImmediate: using polyfill');
+#endif
           // Emulate setImmediate. (note: not a complete polyfill, we don't emulate clearImmediate() to keep code size to minimum, since not needed)
           var setImmediates = [];
           var emscriptenMainLoopMessageId = 'setimmediate';
           /** @param {Event} event */
           var MainLoop_setImmediate_messageHandler = (event) => {
-            // When called in current thread or Worker, the main loop ID is structured slightly different to accommodate for --proxy-to-worker runtime listening to Worker events,
-            // so check for both cases.
-            if (event.data === emscriptenMainLoopMessageId || event.data.target === emscriptenMainLoopMessageId) {
+            if (event.data === emscriptenMainLoopMessageId) {
               event.stopPropagation();
               setImmediates.shift()();
             }
           };
-          addEventListener("message", MainLoop_setImmediate_messageHandler, true);
+          addEventListener('message', MainLoop_setImmediate_messageHandler, true);
           MainLoop.setImmediate = /** @type{function(function(): ?, ...?): number} */((func) => {
             setImmediates.push(func);
             if (ENVIRONMENT_IS_WORKER) {
-              Module['setImmediates'] ??= [];
-              Module['setImmediates'].push(func);
-              postMessage({target: emscriptenMainLoopMessageId}); // In --proxy-to-worker, route the message via proxyClient.js
-            } else postMessage(emscriptenMainLoopMessageId, "*"); // On the main thread, can just send the message to itself.
+              // The postMessge API in a Worker, sends message to the main
+              // thread and does not support the `targetOrigin` (*) argument.
+              postMessage(emscriptenMainLoopMessageId);
+            } else {
+              postMessage(emscriptenMainLoopMessageId, '*');
+            }
           });
-        } else {
-          MainLoop.setImmediate = setImmediate;
         }
       }
       MainLoop.scheduler = function MainLoop_scheduler_setImmediate() {
         MainLoop.setImmediate(MainLoop.runner);
       };
-      MainLoop.method = 'immediate';
     }
     return 0;
   },
@@ -396,7 +433,7 @@ LibraryJSEventLoop = {
    */`,
   $setMainLoop: (iterFunc, fps, simulateInfiniteLoop, arg, noSetTiming) => {
 #if ASSERTIONS
-    assert(!MainLoop.func, 'emscripten_set_main_loop: there can only be one main loop function at once: call emscripten_cancel_main_loop to cancel the previous one before setting a new one with different parameters.');
+    assert(!MainLoop.func, 'emscripten_set_main_loop: there can only be one main loop function at once')
 #endif
     MainLoop.func = iterFunc;
     MainLoop.arg = arg;
@@ -407,7 +444,6 @@ LibraryJSEventLoop = {
 #if RUNTIME_DEBUG
         dbg('main loop exiting');
 #endif
-        {{{ runtimeKeepalivePop() }}}
 #if !MINIMAL_RUNTIME
         maybeExit();
 #endif
@@ -417,11 +453,8 @@ LibraryJSEventLoop = {
     }
 
     // We create the loop runner here but it is not actually running until
-    // _emscripten_set_main_loop_timing is called (which might happen a
-    // later time).  This member signifies that the current runner has not
-    // yet been started so that we can call runtimeKeepalivePush when it
-    // gets it timing set for the first time.
-    MainLoop.running = false;
+    // _emscripten_set_main_loop_timing is called (which might happen at a
+    // later time).
     MainLoop.runner = function MainLoop_runner() {
       if (ABORT) return;
       if (MainLoop.queue.length > 0) {
@@ -440,7 +473,7 @@ LibraryJSEventLoop = {
           }
         }
 #if RUNTIME_DEBUG
-        dbg(`main loop blocker "${blocker.name}" took '${Date.now() - start} ms`); //, left: ' + MainLoop.remainingBlockers);
+        dbg(`main loop blocker '${blocker.name}' took ${Date.now() - start} ms`); //, left: ' + MainLoop.remainingBlockers);
 #endif
         MainLoop.updateStatus();
 
@@ -462,14 +495,12 @@ LibraryJSEventLoop = {
         return;
       } else if (MainLoop.timingMode == {{{ cDefs.EM_TIMING_SETTIMEOUT }}}) {
         MainLoop.tickStartTime = _emscripten_get_now();
-      }
-
 #if ASSERTIONS
-      if (MainLoop.method === 'timeout' && Module['ctx']) {
-        warnOnce('Looks like you are rendering without using requestAnimationFrame for the main loop. You should use 0 for the frame rate in emscripten_set_main_loop in order to use requestAnimationFrame, as that can greatly improve your frame rates!');
-        MainLoop.method = ''; // just warn once per call to set main loop
-      }
+        if (Module['ctx']) {
+          warnOnce('Looks like you are rendering without using requestAnimationFrame for the main loop. You should use 0 for the frame rate in emscripten_set_main_loop in order to use requestAnimationFrame, as that can greatly improve your frame rates!');
+        }
 #endif
+      }
 
       MainLoop.runIter(iterFunc);
 

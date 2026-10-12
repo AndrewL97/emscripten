@@ -25,7 +25,7 @@ def main(args):
   # other lines have:   [benchmark name, result 1          , ..]
   matrix = []
 
-  for line in open(args[0]).readlines():
+  for line in open(args[0], encoding='utf-8').readlines():
     line = line.strip()
     if line.startswith('test_'):
       benchmark = line.split(' ')[0][5:]
@@ -46,9 +46,9 @@ def main(args):
       median = float(parts[7])
       noise = float(parts[13][:-2])
       if noise > 5:
-        print('warning: noisy! (%s: %f%%)' % (benchmark + '.' + benchmarker, noise))
+        print(f'warning: noisy! ({benchmark}.{benchmarker}: {noise:f}%)')
       if abs(mean - median) / mean > 0.05:
-        print('warning: mean and median diverge! (%s: %f vs %f)' % (benchmark + '.' + benchmarker, mean, median))
+        print(f'warning: mean and median diverge! ({benchmark}.{benchmarker}: {mean:f} vs {median:f})')
       # print(benchmark, benchmarker, mean, median, noise)
       matrix[-1] += [median]
 
@@ -57,7 +57,7 @@ def main(args):
     if len(line) >= 2:
       base = line[1]
       for i in range(1, len(line)):
-        line[i] = line[i] / base
+        line[i] /= base
 
   col0_width = max(len(r[0]) for r in matrix)
 
@@ -67,11 +67,11 @@ def main(args):
     if len(row) != len(matrix[0]):
       print('warning: not enough results, skipping row:', row[0])
     else:
-      line = '%*s ' % (col0_width, row[0])
+      line = f'{row[0]:>{col0_width}} '
       if i == 0:
         line += '\t'.join([str(x) for x in row[1:]])
       else:
-        line += '\t'.join(['%.3f' % x for x in row[1:]])
+        line += '\t'.join([f'{x:.3f}' for x in row[1:]])
       result.append(line)
 
   # print results

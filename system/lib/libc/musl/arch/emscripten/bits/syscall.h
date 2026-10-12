@@ -1,11 +1,9 @@
 #define SYS_chdir		 __syscall_chdir
 #define SYS_chmod		 __syscall_chmod
 #define SYS_getpid		 __syscall_getpid
-#define SYS_pause		 __syscall_pause
 #define SYS_sync		 __syscall_sync
 #define SYS_rmdir		 __syscall_rmdir
 #define SYS_dup		 __syscall_dup
-#define SYS_pipe		 __syscall_pipe
 #define SYS_acct		 __syscall_acct
 #define SYS_ioctl		 __syscall_ioctl
 #define SYS_setpgid		 __syscall_setpgid
@@ -23,7 +21,6 @@
 #define SYS_mprotect		__syscall_mprotect
 #define SYS_getpgid		__syscall_getpgid
 #define SYS_fchdir		__syscall_fchdir
-#define SYS__newselect		__syscall__newselect
 #define SYS_msync		__syscall_msync
 #define SYS_getsid		__syscall_getsid
 #define SYS_fdatasync		__syscall_fdatasync
@@ -67,14 +64,11 @@
 #define SYS_readlinkat		__syscall_readlinkat
 #define SYS_fchmodat2		__syscall_fchmodat2
 #define SYS_faccessat		__syscall_faccessat
-#define SYS_pselect6		__syscall_pselect6
 #define SYS_utimensat		__syscall_utimensat
 #define SYS_fallocate		__syscall_fallocate
 #define SYS_dup3		__syscall_dup3
 #define SYS_pipe2		__syscall_pipe2
-#define SYS_recvmmsg		__syscall_recvmmsg
 #define SYS_prlimit64		__syscall_prlimit64
-#define SYS_sendmmsg		__syscall_sendmmsg
 #define SYS_socket		__syscall_socket
 #define SYS_socketpair		__syscall_socketpair
 #define SYS_bind		__syscall_bind
@@ -90,3 +84,6 @@
 #define SYS_recvfrom		__syscall_recvfrom
 #define SYS_recvmsg		__syscall_recvmsg
 #define SYS_shutdown		__syscall_shutdown
+#define SYS_epoll_create1	__syscall_epoll_create1
+#define SYS_epoll_ctl		__syscall_epoll_ctl
+#define SYS_epoll_pwait		__syscall_epoll_pwait

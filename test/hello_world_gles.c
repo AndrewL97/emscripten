@@ -60,16 +60,6 @@
 #define VERTICES_PER_TOOTH 34
 #define GEAR_VERTEX_STRIDE 6
 
-#ifndef HAVE_BUILTIN_SINCOS
-#define sincos _sincos
-static void
-sincos (double a, double *s, double *c)
-{
-  *s = sin (a);
-  *c = cos (a);
-}
-#endif
-
 /**
  * Struct describing the vertices in triangle strip
  */
@@ -549,6 +539,9 @@ gears_draw(void)
    draw_gear(gear3, transform, -3.1, 4.2, -2 * angle - 25.0, blue);
 
    glutSwapBuffers();
+#ifdef __EMSCRIPTEN__
+   EM_ASM({if (typeof reftestUnblock !== 'undefined') reftestUnblock()}); // All done, perform the JS side image comparison reftest.
+#endif
 
 #ifdef LONGTEST
    glutPostRedisplay(); // check for issues with not throttling calls
@@ -645,7 +638,9 @@ gears_idle(void)
       runs++;
       if (runs == 4) {
         int result = fps;
-        assert(fps >= 15 && fps <= 500);
+        // The test may be run with many browsers in parallel so we accept a
+        // very low FPS.
+        assert(fps >= 1 && fps <= 500);
 #ifdef REPORT_RESULT
         REPORT_RESULT(0);
 #endif
@@ -773,6 +768,11 @@ main(int argc, char *argv[])
    /* Initialize the gears */
    gears_init();
 
+#ifdef __EMSCRIPTEN__
+   // This test kicks off an asynchronous glutMainLoop(), so do not perform a synchronous
+   // reftest immediately after falling out from main.
+   EM_ASM({if (typeof reftestBlock !== 'undefined') reftestBlock()});
+#endif
    glutMainLoop();
 
    return 0;

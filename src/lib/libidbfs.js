@@ -6,29 +6,43 @@
 
 addToLibrary({
   $IDBFS__deps: ['$FS', '$MEMFS', '$PATH'],
-  $IDBFS__postset: () => {
-    addAtExit('IDBFS.quit();');
-    return '';
-  },
+  $IDBFS__postset: () => addAtExit('IDBFS.quit();'),
   $IDBFS: {
     dbs: {},
     indexedDB: () => {
 #if ASSERTIONS
-      assert(typeof indexedDB != 'undefined', 'IDBFS used, but indexedDB not supported');
+      assert(typeof indexedDB !== 'undefined', 'IDBFS used, but indexedDB not supported');
 #endif
       return indexedDB;
     },
     DB_VERSION: 21,
     DB_STORE_NAME: 'FILE_DATA',
 
+    // When using the autopersistence mechanism, users can set
+    // IDBFS.onAutoPersistStateChanged callback to receive notification events
+    // for when persistence operations are in-flight. Use the following syntax:
+    /*
+    IDBFS.onAutoPersistStateChanged = autoPersistActive => {
+      if (autoPersistActive) {
+        console.log('IDBFS persistence operation has started.');
+      } else {
+        console.log('IDBFS persistence operation has finished.');
+      }
+    };
+    */
+
     // Queues a new VFS -> IDBFS synchronization operation
     queuePersist: (mount) => {
       function onPersistComplete() {
         if (mount.idbPersistState === 'again') startPersist(); // If a new sync request has appeared in between, kick off a new sync
-        else mount.idbPersistState = 0; // Otherwise reset sync state back to idle to wait for a new sync later
+        else {
+          mount.idbPersistState = 0; // Otherwise reset sync state back to idle to wait for a new sync later
+          IDBFS.onAutoPersistStateChanged?.(false);
+        }
       }
       function startPersist() {
         mount.idbPersistState = 'idb'; // Mark that we are currently running a sync operation
+        IDBFS.onAutoPersistStateChanged?.(true);
         IDBFS.syncfs(mount, /*populate:*/false, onPersistComplete);
       }
 
@@ -54,7 +68,7 @@ addToLibrary({
       // If the automatic IDBFS persistence option has been selected, then automatically persist
       // all modifications to the filesystem as they occur.
       if (mount?.opts?.autoPersist) {
-        mnt.idbPersistState = 0; // IndexedDB sync starts in idle state
+        mount.idbPersistState = 0; // IndexedDB sync starts in idle state
         var memfs_node_ops = mnt.node_ops;
         mnt.node_ops = {...mnt.node_ops}; // Clone node_ops to inject write tracking
         mnt.node_ops.mknod = (parent, name, mode, dev) => {
@@ -85,10 +99,12 @@ addToLibrary({
             if (n.memfs_stream_ops.close) return n.memfs_stream_ops.close(stream);
           };
 
+          // Persist the node we just created to IndexedDB
+          IDBFS.queuePersist(mnt.mount);
+
           return node;
         };
         // Also kick off persisting the filesystem on other operations that modify the filesystem.
-        mnt.node_ops.mkdir   = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.mkdir(...args));
         mnt.node_ops.rmdir   = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.rmdir(...args));
         mnt.node_ops.symlink = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.symlink(...args));
         mnt.node_ops.unlink  = (...args) => (IDBFS.queuePersist(mnt.mount), memfs_node_ops.unlink(...args));
@@ -112,7 +128,9 @@ addToLibrary({
       });
     },
     quit: () => {
-      Object.values(IDBFS.dbs).forEach((value) => value.close());
+      for (var value of Object.values(IDBFS.dbs)) {
+        value.close()
+      }
       IDBFS.dbs = {};
     },
     getDB: (name, callback) => {
@@ -129,7 +147,7 @@ addToLibrary({
         return callback(e);
       }
       if (!req) {
-        return callback("Unable to connect to IndexedDB");
+        return callback('Unable to connect to IndexedDB');
       }
       req.onupgradeneeded = (e) => {
         var db = /** @type {IDBDatabase} */ (e.target.result);
@@ -176,7 +194,7 @@ addToLibrary({
         var stat;
 
         try {
-          stat = FS.stat(path);
+          stat = FS.lstat(path);
         } catch (e) {
           return callback(e);
         }
@@ -228,13 +246,15 @@ addToLibrary({
       try {
         var lookup = FS.lookupPath(path);
         node = lookup.node;
-        stat = FS.stat(path);
+        stat = FS.lstat(path);
       } catch (e) {
         return callback(e);
       }
 
       if (FS.isDir(stat.mode)) {
         return callback(null, { 'timestamp': stat.mtime, 'mode': stat.mode });
+      } else if (FS.isLink(stat.mode)) {
+        return callback(null, { 'timestamp': stat.mtime, 'mode': stat.mode, 'link': node.link, });
       } else if (FS.isFile(stat.mode)) {
         // Performance consideration: storing a normal JavaScript array to a IndexedDB is much slower than storing a typed array.
         // Therefore always convert the file contents to a typed array first before writing the data to IndexedDB.
@@ -248,6 +268,8 @@ addToLibrary({
       try {
         if (FS.isDir(entry['mode'])) {
           FS.mkdirTree(path, entry['mode']);
+        } else if (FS.isLink(entry['mode'])) {
+          FS.symlink(entry['link'], path);
         } else if (FS.isFile(entry['mode'])) {
           FS.writeFile(path, entry['contents'], { canOwn: true });
         } else {
@@ -264,11 +286,11 @@ addToLibrary({
     },
     removeLocalEntry: (path, callback) => {
       try {
-        var stat = FS.stat(path);
+        var stat = FS.lstat(path);
 
         if (FS.isDir(stat.mode)) {
           FS.rmdir(path);
-        } else if (FS.isFile(stat.mode)) {
+        } else {
           FS.unlink(path);
         }
       } catch (e) {
@@ -310,22 +332,21 @@ addToLibrary({
       var total = 0;
 
       var create = [];
-      Object.keys(src.entries).forEach((key) => {
-        var e = src.entries[key];
+      for (var [key, e] of Object.entries(src.entries)) {
         var e2 = dst.entries[key];
         if (!e2 || e['timestamp'].getTime() != e2['timestamp'].getTime()) {
           create.push(key);
           total++;
         }
-      });
+      }
 
       var remove = [];
-      Object.keys(dst.entries).forEach((key) => {
+      for (var key of Object.keys(dst.entries)) {
         if (!src.entries[key]) {
           remove.push(key);
           total++;
         }
-      });
+      }
 
       if (!total) {
         return callback(null);
@@ -357,7 +378,7 @@ addToLibrary({
 
       // sort paths in ascending order so directory entries are created
       // before the files inside them
-      create.sort().forEach((path) => {
+      for (const path of create.sort()) {
         if (dst.type === 'local') {
           IDBFS.loadRemoteEntry(store, path, (err, entry) => {
             if (err) return done(err);
@@ -369,21 +390,21 @@ addToLibrary({
             IDBFS.storeRemoteEntry(store, path, entry, done);
           });
         }
-      });
+      }
 
       // sort paths in descending order so files are deleted before their
       // parent directories
-      remove.sort().reverse().forEach((path) => {
+      for (var path of remove.sort().reverse()) {
         if (dst.type === 'local') {
           IDBFS.removeLocalEntry(path, done);
         } else {
           IDBFS.removeRemoteEntry(store, path, done);
         }
-      });
+      }
     }
   }
 });
 
 if (WASMFS) {
-  error("using -lidbfs is not currently supported in WasmFS.");
+  error('using -lidbfs is not currently supported in WasmFS.');
 }
