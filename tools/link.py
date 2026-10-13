@@ -2705,6 +2705,7 @@ def map_to_js_libs(library_name):
     # for compatibility with GNU toolchains.
     'stdc++': [],
     'SDL2_mixer': [],
+    'SDL3_mixer': [],
   }
 
   if library_name in library_map:
@@ -2792,6 +2793,7 @@ def apply_library_settings(linker_args):
       'glfw3': {'USE_GLFW': 3},
       'SDL': {'USE_SDL': 1},
       'SDL2_mixer': {'USE_SDL_MIXER': 2},
+      'SDL3_mixer': {'USE_SDL_MIXER': 3},
     }
 
     if library_name in settings_map:
