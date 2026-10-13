@@ -1590,7 +1590,7 @@ var USE_MPG123 = false;
 // [compile+link]
 var USE_FREETYPE = false;
 
-// Specify the SDL_mixer version that is being linked against.
+// Specify the SDL_mixer version that is being linked against. Use 3 for SDL3_mixer.
 // Doesn't *have* to match USE_SDL, but a good idea.
 // [compile+link]
 var USE_SDL_MIXER = 1;
@@ -1618,6 +1618,10 @@ var SDL2_IMAGE_FORMATS = [];
 // Formats to support in SDL2_mixer. Valid values: ogg, mp3, mod, mid
 // [compile+link]
 var SDL2_MIXER_FORMATS = ["ogg"];
+
+// Formats to support in SDL3_mixer. Valid values: ogg, mp3, mid
+// [compile+link]
+var SDL3_MIXER_FORMATS = ["ogg"];
 
 // 1 = use sqlite3 from emscripten-ports
 // Alternate syntax: --use-port=sqlite3
